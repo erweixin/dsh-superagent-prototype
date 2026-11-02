@@ -1,6 +1,6 @@
 /**
  * Context-free UI primitives styled with `--dsw-alias-*` tokens.
- * Mirrors DSH ui-primitives markup and keyboard behavior without coupling to its internal package API.
+ * Reusable local panel markup and keyboard behavior.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type KeyboardEvent,
   type ReactNode } from 'react'

@@ -3,3 +3,6 @@ lib/
 .artifacts/
 .env
 coverage/
+dist/
+superagent.config.json
+!examples/superagent.config.json

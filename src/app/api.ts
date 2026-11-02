@@ -1,5 +1,6 @@
 /** Type-only management API contract between the web panel and host routes, imported by the panel without bundling host code. */
-import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { FeishuBotSetupRequest, FeishuBotSetupResult } from './feishu-setup.ts'
+import type { ModelCatalog } from './agent-runtime.ts'
 import type { PromptConfig, Prompts } from './prompts.ts'
 import type { PromptsView, StateView, TicketPageView } from './http.ts'
 import type { HistoryView } from './settings-history.ts'
@@ -38,6 +39,7 @@ export interface Api {
   'PUT settings/:block': { body: { value: unknown; revision: number }; response: { revision: number; restarting: boolean } }
   'GET policy/history': { response: HistoryView }
   'POST policy-sync/:id': { response: { policy: unknown } }
+  'POST setup/feishu': { body: FeishuBotSetupRequest; response: FeishuBotSetupResult }
   'POST setup/check': { response: { restarting: true } }
   'GET models': { response: ModelCatalog }
   'GET prompts': { query?: { revision?: number; offset?: number }; response: PromptsView }

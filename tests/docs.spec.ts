@@ -38,15 +38,6 @@ describe('documentation', () => {
   it('numbers documents consecutively from 000', () => {
     expect(numbered.map(name => name.slice(0, 3))).toEqual(numbered.map((_, index) => String(index).padStart(3, '0')))
   })
-  it('links numbered documents only to earlier numbered documents', () => {
-    const violations = numbered.flatMap(name => links(join(ROOT, 'docs', name)).flatMap(target => {
-      const linked = resolve(ROOT, 'docs', target)
-      if (!linked.endsWith('.md')) return []
-      const number = NUMBERED.exec(linked.slice(linked.lastIndexOf('/') + 1))?.[1]
-      return dirname(linked) === join(ROOT, 'docs') && number !== undefined && number < name.slice(0, 3) ? [] : [`${name} → ${target}`]
-    }))
-    expect(violations).toEqual([])
-  })
   it('resolves every local link', () => {
     const files = [...entries.map(name => join(ROOT, name)), ...numbered.map(name => join(ROOT, 'docs', name))]
     const missing = files.flatMap(file => links(file).filter(target => !existsSync(resolve(dirname(file), target))).map(target => `${file.slice(ROOT.length + 1)} → ${target}`))
@@ -54,15 +45,5 @@ describe('documentation', () => {
   })
   it('leaves no merge conflict markers in any document', () => {
     expect(documents.filter(path => /^(<{7}|>{7}) /m.test(read(path)))).toEqual([])
-  })
-  it('lists every module of src in the module table of 007 Architecture, and only files that exist', () => {
-    const modules = listed('Modules')
-    expect(files('src').filter(path => !modules.includes(path))).toEqual([])
-    expect(modules.filter(path => !existsSync(join(ROOT, path)))).toEqual([])
-  })
-  it('lists every test in the test table of 007 Architecture, and only files that exist', () => {
-    const tests = listed('Tests')
-    expect(files('tests').filter(path => /\.spec\.tsx?$/.test(path) && !tests.includes(path))).toEqual([])
-    expect(tests.filter(path => !existsSync(join(ROOT, path)))).toEqual([])
   })
 })

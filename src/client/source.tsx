@@ -1,4 +1,5 @@
 /** Source status view (health, filtered Triggers, dropped replies) and Source settings cards. */
+import { FeishuSetup } from './feishu-setup.tsx'
 import { useEffect, useState } from 'react'
 import type { FieldSpec } from '../sources/kind.ts'
 import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
@@ -22,7 +23,7 @@ function SourceCard({ source }: { source: SourceView }) {
   const value = draft.value
   const { problem, value: saved } = source
   const changed = (key: string) => String(value.config[key] ?? '') !== String(saved.config[key] ?? '')
-  // Saving a modified setup-sensitive field restarts dsh-superagent, interrupting running Assignments.
+  // Saving a modified setup-sensitive field restarts feishu-superagent, interrupting running Assignments.
   const restarts = draft.dirty && source.restarts.some(changed)
   const description = localized(t, source.description)
   // Hide derived facts for unsaved field edits until the new value is saved.
@@ -62,6 +63,7 @@ export function SourceSettings({ focus }: { focus?: string }) {
   const { sources } = useSettings().settings
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
   return <div className="dt-form">
+    <FeishuSetup source={sources.find(source => source.id === 'feishu')} />
     {sources.map(source => <SourceCard key={source.id} source={source} />)}
     <ConfigHistory blocks={['source:']} />
   </div>

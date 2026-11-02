@@ -3,7 +3,6 @@ import { act, useState, type ComponentType } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApiError, caller, usePoll } from '../src/client/api.ts'
-import { apply } from '../src/client/index.tsx'
 import { zh } from '../src/client/locales.ts'
 import { SettingsSchema } from '../src/policy.ts'
 
@@ -12,22 +11,6 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 type Entry = { options: { name: string; id?: string; key?: string; order?: number; locale?: string; label?: () => string }; component: ComponentType<Record<string, unknown>> }
 const t = ((key: keyof typeof zh) => zh[key] ?? key) as never
-function fixture(listed: string[]) {
-  const entries: Entry[] = []
-  const dictionaries: Record<string, unknown> = {}
-  const ctx = {
-    slots: { inject: (_name: string, register: () => void) => register(), register: (options: Entry['options'], component: Entry['component']) => { entries.push({ options, component }); return () => {} } },
-    locale: { register: (ns: string, value: unknown) => { dictionaries[ns] = value; return () => {} }, bind: () => t },
-    effect: (effect: () => unknown) => { effect() },
-    sessions: { list: { getSnapshot: () => ({ phase: 'ready', byId: Object.fromEntries(listed.map(id => [id, {}])) }) }, refresh: vi.fn(async () => {}) },
-    uiWorkspace: { openSession: vi.fn() },
-    // Omit config form service so Deployment renders read-only.
-    get: () => undefined,
-  }
-  apply(ctx as never)
-  const entry = (name: string) => entries.find(item => item.options.name === name)!
-  return { ctx, entries, dictionaries, main: entry('main'), nav: entry('sidebar.panellist') }
-}
 async function render(entry: Entry, props: Record<string, unknown>) {
   const container = document.createElement('div'); document.body.append(container)
   const root = createRoot(container)
@@ -48,35 +31,6 @@ const serve = () => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   return Response.json({ error: 'unavailable' }, { status: 503 })
 }))
 afterEach(() => { vi.unstubAllGlobals() })
-
-it('registers a localized main panel, sidebar entry and Plugin Manager row page, and no settings section', () => {
-  const { entries, dictionaries, main, nav } = fixture([])
-  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'plugins.row.config'])
-  expect(entries[2]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
-  expect(Object.keys(dictionaries)).toEqual(['dshSuperagent'])
-  expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
-  expect(nav.options).toMatchObject({ id: 'dsh-superagent', order: 10, locale: 'dshSuperagent' })
-  expect(nav.options.label?.()).toBe('Superagent')
-})
-
-it('opens a listed Session through the workspace from the main panel', async () => {
-  serve()
-  const { ctx, main } = fixture(['master'])
-  const view = await render(main, { t })
-  await openMaster(view.container)
-  expect(ctx.uiWorkspace.openSession).toHaveBeenCalledExactlyOnceWith('master')
-  view.dispose()
-})
-
-it('reports a Session missing from the catalog in the interface language', async () => {
-  serve()
-  const { ctx, main } = fixture([])
-  const view = await render(main, { t })
-  await openMaster(view.container)
-  expect(ctx.uiWorkspace.openSession).not.toHaveBeenCalled()
-  expect(document.body.textContent).toContain(zh.sessionNotListed)
-  view.dispose()
-})
 
 it('polls one request at a time, keeps the data while new dependencies load, and polls less while hidden', async () => {
   vi.useFakeTimers()
@@ -120,7 +74,7 @@ it('polls one request at a time, keeps the data while new dependencies load, and
   vi.useRealTimers()
 })
 
-it('tells a dsh-superagent that does not answer from a record it does not have, and words each failure by what failed', async () => {
+it('tells a feishu-superagent that does not answer from a record it does not have, and words each failure by what failed', async () => {
   const messages = { offline: 'offline', notRunning: 'not running', serverError: (status: number) => `server ${status}`,
     requestFailed: (status: number) => `request ${status}`, setup: () => 'setup', user: ({ code }: { code: string }) => `user ${code}` }
   const call = caller(() => messages)
@@ -133,7 +87,7 @@ it('tells a dsh-superagent that does not answer from a record it does not have, 
   }
   expect(await failure(async () => { throw new TypeError('Failed to fetch') })).toEqual({ message: 'offline', status: 0, missing: false,
     unreachable: true })
-  // DSH's web server answers an empty 404 while dsh-superagent's routes are unregistered.
+  // DSH's web server answers an empty 404 while feishu-superagent's routes are unregistered.
   expect(await failure(async () => new Response(null, { status: 404 }))).toEqual({ message: 'not running', status: 404, missing: false,
     unreachable: true })
   expect(await failure(async () => new Response(null, { status: 502 }))).toEqual({ message: 'server 502', status: 502, missing: false,

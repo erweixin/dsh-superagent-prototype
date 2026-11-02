@@ -7,14 +7,15 @@ import { Engine, type ChannelRef, type Trigger } from '../src/core/index.ts'
 import { Store } from '../src/app/store.ts'
 import { threadDetail } from '../src/app/views/threads.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
-import { githubKind } from '../src/sources/github.ts'
-import { githubLink } from '../src/sources/github-channel.ts'
+import { z } from 'zod'
+const githubKind={kind:'github',title:{zh:'test',en:'test'},description:{zh:'',en:''},schema:z.object({}),fields:[],health:[]}
+const githubLink=(_address:unknown,_links:unknown)=>({url:'',label:{zh:'test',en:'test'}})
 import { SourceRegistry } from '../src/sources/registry.ts'
 
 let directory: string
 let store: Store
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), 'dsh-superagent-timeline-'))
+  directory = mkdtempSync(join(tmpdir(), 'feishu-superagent-timeline-'))
   store = new Store(join(directory, 'orchestrator.sqlite'))
 })
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }) })

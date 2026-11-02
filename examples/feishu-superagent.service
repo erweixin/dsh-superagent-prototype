@@ -1,0 +1,17 @@
+# Copy to ~/.config/systemd/user/feishu-superagent.service and replace all /absolute/path values.
+[Unit]
+Description=Feishu Superagent
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/absolute/path/to/feishu-superagent
+ExecStart=/absolute/path/to/node /absolute/path/to/feishu-superagent/lib/index.js /absolute/path/to/superagent.config.json
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

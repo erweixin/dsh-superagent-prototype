@@ -1,0 +1,5 @@
+{
+  "stateDir": "/absolute/path/to/superagent-state",
+  "port": 4317,
+  "codexPath": "codex"
+}

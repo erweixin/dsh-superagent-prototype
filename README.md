@@ -1,39 +1,42 @@
-# dsh-superagent
+# Feishu Superagent
 
-> **Research prototype for reference only, not an official DeepSeek product.** This code grew out of our team's day-to-day development work, with much of the engineering done by coding agents. Treat it as research code, not production-ready software. It may still contain bugs, and its coding style and engineering practices may be inconsistent. Review and adapt it before using it in your own environment.
->
-> We have adapted it for publication, so it is not identical to our internal version or the implementation described in *Exploring Super-agent Design: Towards a More Autonomous Agent System*. Some designs discussed in the article are directions for future development and are not implemented in this prototype.
+A standalone Node.js work assistant, with a React management panel, Feishu intake through `lark-cli`, and persistent Codex CLI worker sessions. Research prototype: review and adapt it before using it with your team.
 
-dsh-superagent is a proactive coding agent for one GitHub repository, packaged as a bundle for [DeepSeek Harness](https://www.deepseek.com/en/harness/). It listens to GitHub and, optionally, Feishu. When someone allowed asks the agent for work, it opens a work item, works on it in its own agent session and directory, and answers in the original conversation, for example with a pull request. A web panel shows what needs a person.
+The guiding principle remains: **take as little human attention as possible, and give as much value as possible**. Explicit requests and written rules authorize work. Routine progress stays internal; results and questions return to the original conversation.
 
-It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
+## Start
 
-## Setup
+Requirements: macOS or Linux, Node.js 22.19+, Codex CLI **0.153.4**, and a bot-only `lark-cli` configuration for Feishu. No DSH, GitHub CLI, or Git repository is required.
 
-Setup has many steps, so an agent does it with you. Ask your coding agent:
+```sh
+npm install
+npm run build
+codex login
+npm start
+```
 
-> Read SETUP.md in this repository and set up dsh-superagent with me.
+Open the loopback address printed by the service (default `http://127.0.0.1:4317`). The management panel remains available when CLI setup is incomplete. In Settings → Sources, use “Connect a Feishu bot” to enter the CLI executable, App ID and App Secret, check the bot, then save. Add allowed Feishu users in Settings → Evaluation. The local operator can submit requests from the main session page.
 
-It asks one short question at a time, shows the full plan once, and then installs and configures everything. [SETUP.md](SETUP.md) is what it follows.
+Optional `superagent.config.json`:
 
-## Documentation
+```json
+{
+  "stateDir": "/absolute/path/to/superagent-state",
+  "port": 4317,
+  "codexPath": "/absolute/path/to/codex"
+}
+```
 
-Read the numbered documents in order; each builds only on the ones before it.
+Pass another configuration file with `npm start -- /absolute/path/config.json`. Missing configuration uses `~/.feishu-superagent`. Keep configuration and credentials outside the repository. Use a new state directory: old DSH databases and sessions are not imported.
 
-- [000 Philosophy](docs/000-philosophy.md)
-- [001 Domain model](docs/001-domain.md)
-- [002 Authorization](docs/002-authorization.md)
-- [003 Execution](docs/003-execution.md)
-- [004 Prompts](docs/004-prompts.md)
-- [005 Panel](docs/005-panel.md)
-- [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
-- [007 Architecture](docs/007-architecture.md)
-- [008 Cookbook](docs/008-cookbook.md): adding a Source
+`npm run dev` starts the TypeScript server and Vite hot-reloading panel on the same loopback address. `npm run check` runs type checking, tests, and production builds.
 
-## Development
+## Operation
 
-`pnpm check` runs the typecheck, the tests and the build.
+Each ticket has a private working directory and a persistent Codex thread. The domain Engine owns authorization and ticket lifecycle; ending a Codex turn does not imply a successful result. Codex permissions default to read-only for the router and workspace-write for workers. Extra permissions require an explicit local-panel approval. The panel is local-only and has no remote-user authentication.
 
-## License
+Feishu uses the configured bot identity, including history recovery, original-message reads, images, member synchronization, and replies. Ordinary output goes through the durable Outbox. Local artifacts can be downloaded from the worker session page; local paths are not remote Feishu links.
 
-[MIT](LICENSE)
+Codex protocol tools are experimental and version-pinned. The service keeps uncertain deliveries for inspection instead of blindly repeating external work. A restart interrupts active work and expires outstanding approvals; inspect the session and retry the ticket from the panel.
+
+See [SETUP.md](SETUP.md) and the numbered [design documents](docs/000-philosophy.md). The original architecture and licensing remain credited to the DeepSeek Harness Team; this application no longer depends on the DSH host.

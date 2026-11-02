@@ -1,5 +1,5 @@
 /** The environment of the git processes the tests start. */
-import { GIT_LOCATION } from '../../src/infra/environment.ts'
+const GIT_LOCATION=['GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_COMMON_DIR']
 
 /**
  * The process environment with `extra`, and without the variables that tell git which repository to act on (`GIT_LOCATION`):

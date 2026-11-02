@@ -1,5 +1,5 @@
+import type { AgentRuntime } from './agent-runtime.ts'
 /** Block-scoped settings validation, optimistic concurrency saves, processing pause control, and source policy synchronization. */
-import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { UserError, type EngineForSettings } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
@@ -60,8 +60,8 @@ export interface SettingsHost {
   readonly engine: EngineForSettings
   /** Health board where each source's policy sync reports under `sync:<id>`. */
   readonly health: Pick<HealthBoard, 'claim'>
-  /** DSH Cordis context used to validate and resolve role models. */
-  readonly context: Context
+  /** Application runtime used to validate and resolve role models. */
+  readonly agentRuntime: AgentRuntime
   readonly lifetime: AbortSignal
   /** Session manager through which the main Session is notified of saved settings. */
   readonly sessions: Pick<Sessions, 'notify' | 'delivery'>
@@ -139,7 +139,7 @@ export class Settings {
   /**
    * Validates and saves one settings block against its `revision`; a no-op save records no new revision, a changed policy
    * version notifies affected open tickets, and changing a setup-read field (`SETUP_FIELDS`, such as an account CLI) or any
-   * change saved while waiting for setup (`!this.host.setup.configured()`) restarts `dsh-superagent` so setup runs again.
+   * change saved while waiting for setup (`!this.host.setup.configured()`) restarts `feishu-superagent` so setup runs again.
    * @param origin - Caller origin; restricts execution-environment and account-CLI changes to `'panel'` (a guardrail against prompt-injected tool calls, not an OS security boundary, since agents run shell commands; `origin` has no default so no caller receives panel privileges implicitly).
    * @returns Save outcome with the block's current `revision`, whether `policy_changed`, whether `restarting`, and `context_delivery` status (`'injected'` or `'pending'`).
    * @throws SettingsConflict when `block`'s revision changed before or during validation checks.
@@ -160,7 +160,7 @@ export class Settings {
     const model = block === 'eval' ? candidate.eval.model : block === 'executor' ? candidate.executor.model : null
     const previous = block === 'eval' ? current.eval.model : block === 'executor' ? current.executor.model : null
     if (model && JSON.stringify(model) !== JSON.stringify(previous)) {
-      try { await resolveRoleModel(this.host.context, model) }
+      try { await resolveRoleModel(this.host.agentRuntime, model) }
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)

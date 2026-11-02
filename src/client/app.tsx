@@ -6,7 +6,7 @@ import type { DeploymentForm } from './deployment.tsx'
 import { EvalStatus } from './eval.tsx'
 import { ExecutionStatus } from './execution.tsx'
 import { ticketMark } from './marks.ts'
-import { GLOSSARY, GLOSSARY_VALUES, en, zh, type DshSuperagentKey } from './locales.ts'
+import { GLOSSARY, GLOSSARY_VALUES, en, zh, type SuperagentKey } from './locales.ts'
 import { OverviewPage } from './overview.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
 import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, settingsRoute, type Location, type Route,
@@ -47,7 +47,7 @@ function Glossary({ open, onClose }: { open: boolean; onClose: () => void }) {
         <Dot state={state} /><span>{t(`legend.${state}`)}</span>
       </li>)}</ul>
       <dl className="dt-values">{Object.entries(GLOSSARY_VALUES).map(([group, values]) => <div key={group} style={{ display: 'contents' }}>
-        <dt>{own[`term.${group}` as DshSuperagentKey]}</dt>
+        <dt>{own[`term.${group}` as SuperagentKey]}</dt>
         <dd>{values.map(key => `${own[key]} ${other[key]}`).join(' · ')}</dd>
       </div>)}</dl>
     </div>
@@ -73,7 +73,7 @@ function SearchResults({ result, query, onClose }: { result: SearchView; query: 
   const go = (route: Route) => () => { onClose(); navigate(route) }
   return <div className="dt-search-results" role="region" aria-label={t('searchLabel')}>
     <div className="dt-search-head">
-      <span className="dt-hint">{empty ? t(setup?.accounts?.feishu ? 'searchNone' : 'searchNoneGithub')
+      <span className="dt-hint">{empty ? t('searchNone')
         : t(result.items.length >= 20 ? 'searchFoundCapped' : 'searchFound', counts)}</span>
       <Button variant="ghost" size="sm" icon={<Icon name="close" size={14} />} aria-label={t('close')} onClick={onClose} />
     </div>

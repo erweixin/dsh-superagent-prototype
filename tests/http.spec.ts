@@ -1,98 +1,88 @@
-import { expect, it } from 'vitest'
-import { z } from 'zod'
-import { registerHttp } from '../src/app/http.ts'
-import { PromptConflict } from '../src/app/prompts.ts'
-import { SettingsConflict } from '../src/app/settings.ts'
-import type { HttpHost } from '../src/app/http.ts'
-import { SettingsSchema } from '../src/policy.ts'
-import { SetupError } from '../src/setup.ts'
-
-type Handler = (req: unknown, res: unknown) => Promise<void>
-type Headers = Record<string, string | undefined>
-/** Mount management HTTP routes on a fake web server and return a request helper that includes default panel headers. */
-function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1') {
-  let handler: Handler = async () => {}
-  const ctx = { webServer: { host, port: 3082, register: (route: { handler: Handler }) => { handler = route.handler; return () => {} } } }
-  registerHttp(ctx as never, { ready: Promise.resolve(), ...runtime } as unknown as HttpHost)
-  return async (method: string, path: string, body?: unknown, headers: Headers = {}) => {
-    let status = 0, text = ''
-    const chunks = body === undefined ? [] : [Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))]
-    const sent = Object.fromEntries(Object.entries({ host: '127.0.0.1:3082', 'x-orchestrator-request': '1', ...headers }).filter(([,
-      value]) => value !== undefined))
-    const req = { method, url: `/orchestrator/api/${path}`, headers: sent, async *[Symbol.asyncIterator]() { yield* chunks } }
-    await handler(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
-    return { status, body: JSON.parse(text) as Record<string, unknown> }
-  }
-}
-
-it('answers each kind of failure with its own status', async () => {
-  const saves: unknown[] = []
-  const call = serve({
-    store: { tickets: { get: () => undefined }, blockRevision: () => 0 },
-    sources: { instances: () => [{ id: 'github' }] },
-    settings: { save: async (...args: unknown[]) => {
-      saves.push(args)
-      if (args[1] === 'stale') throw new SettingsConflict('Settings changed. Reload before saving.')
-      if (args[1] === 'invalid') z.object({ maxWorkers: z.number() }).parse({})
-      if (args[1] === 'refused') throw new SetupError('agentCliUnset')
-      if (args[1] === 'broken') throw new Error('disk full')
-      return { saved: true, revision: 1, restarting: false }
-    } },
-  })
-  expect(await call('PUT', 'settings/executor', { value: 'stale', revision: 0 })).toMatchObject({ status: 409 })
-  expect(await call('PUT', 'settings/executor', { value: 'invalid', revision: 0 })).toMatchObject({ status: 400, body: { issues: [{ path: 'maxWorkers' }] } })
-  expect(await call('PUT', 'settings/source:github', { value: 'refused', revision: 0 })).toMatchObject({ status: 400, body: { setup: { code: 'agentCliUnset', place: 'github' } } })
-  expect(await call('PUT', 'settings/executor', { value: 'broken', revision: 0 })).toEqual({ status: 500, body: { error: 'disk full' } })
-  // Block names are validated before calling settings.save: reject unknown blocks or non-existent Sources.
-  expect(await call('PUT', 'settings/pause', { value: {}, revision: 0 })).toMatchObject({ status: 400 })
-  expect(await call('PUT', 'settings/source:feishu', { value: {}, revision: 0 })).toEqual({ status: 404, body: { error: 'Source not found' } })
-  expect(saves).toHaveLength(4)
-  expect(await call('POST', 'tickets/t9/retry')).toEqual({ status: 404, body: { error: 'Ticket not found' } })
-  expect(await call('GET', 'nothing/here')).toEqual({ status: 404, body: { error: 'Unknown operation' } })
-  expect(await call('POST', 'executor/pause', 'not json')).toEqual({ status: 400, body: { error: 'The request body is not JSON' } })
+import { afterEach, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { startApplication } from '../src/index.ts'
+let app: Awaited<ReturnType<typeof startApplication>> | undefined, root: string | undefined
+afterEach(async () => {
+  await app?.stop()
+  if (root) rmSync(root, { recursive: true, force: true })
+  app = undefined
+  root = undefined
 })
-
-it('decodes path parameters and parses each route\'s query', async () => {
-  const seen: unknown[] = []
-  const call = serve({
-    store: { settings: () => SettingsSchema.parse({}),
-      read: { decisions: (filter: unknown, offset: number, limit: number) => { seen.push({ filter, offset, limit }); return { items: [], more: false } } } },
-    links: () => () => ({ url: '', label: { zh: '', en: '' } }),
-    engine: { unsubscribe: (key: string) => { seen.push(key); return true } },
-    sessions: { delivery: async () => 'injected' },
+it('serves a standalone panel, enforces same origin, and records local requests without GitHub', async () => {
+  root = mkdtempSync(join(tmpdir(), 'superagent-http-'))
+  const config = join(root, 'config.json')
+  writeFileSync(
+    config,
+    JSON.stringify({ stateDir: join(root, 'state'), port: 0, codexPath: resolve('tests/fixtures/codex.mjs') })
+  )
+  app = await startApplication(config)
+  await app.runtime.ready
+  const port = (app.server.address() as { port: number }).port,
+    base = `http://127.0.0.1:${port}`
+  expect((await fetch(base)).status).toBe(200)
+  expect((await fetch(`${base}/orchestrator/api/state`)).status).toBe(403)
+  const headers = { 'x-orchestrator-request': '1', 'content-type': 'application/json' }
+  const botRequest = { action: 'check', cli: resolve('tests/fixtures/lark-setup.mjs'), appId: 'cli_fixture',
+    appSecret: 'fixture-secret', brand: 'feishu' }
+  const unauthorizedBot = await fetch(`${base}/orchestrator/api/setup/feishu`, {
+    method: 'POST', headers: { ...headers, origin: 'https://untrusted.example' }, body: JSON.stringify(botRequest)
   })
-  expect(await call('POST', `threads/${encodeURIComponent('feishu:oc_1:om/root')}/unsubscribe`)).toMatchObject({ status: 200, body: { context_delivery: 'injected' } })
-  // Invalid offsets default to 0, and limits above the route maximum are clamped.
-  expect(await call('GET', 'decisions?kind=accept%2Creopen&limit=500&offset=x&window=24h')).toEqual({ status: 200, body: { items: [], next_offset: null } })
-  expect(seen).toEqual(['feishu:oc_1:om/root', { filter: { kinds: ['accept', 'reopen'], since: expect.any(String) }, offset: 0, limit: 200 }])
-})
-
-it('answers only a same-origin request from the panel on the loopback address', async () => {
-  const call = serve({ sessions: { delivery: async () => 'injected' }, engine: { unsubscribe: () => true } })
-  const post = (headers: Headers) => call('POST', 'threads/github%3A1/unsubscribe', undefined, headers)
-  for (const headers of [{ 'x-orchestrator-request': undefined }, { host: 'evil.example:3082' }, { host: '127.0.0.1:9999' },
-    { origin: 'http://evil.example' }, { host: 'localhost:3082', origin: 'http://127.0.0.1:3082' }]) {
-    expect(await post(headers), JSON.stringify(headers)).toEqual({ status: 403,
-      body: { error: 'Same-origin management request required' } })
-  }
-  expect(await post({ host: 'localhost:3082', origin: 'http://localhost:3082' })).toMatchObject({ status: 200 })
-  // Management routes require a loopback Web server.
-  expect(() => serve({}, '0.0.0.0')).toThrow('Orchestrator management requires a loopback Web server')
-})
-
-it('answers a prompt save that lost a race with 409, and a settings body over 128 KiB with 400', async () => {
-  const saves: unknown[] = []
-  const call = serve({
-    machine: { promptMaxChars: { get: () => 100_000 } },
-    store: { atomic: (work: () => unknown) => work(), blockRevision: () => 0 },
-    prompts: { save: () => { throw new PromptConflict('Prompt version changed to 3; compare the latest version before saving') } },
-    sessions: { notify: () => {}, delivery: async () => 'injected' },
-    settings: { save: async (...args: unknown[]) => { saves.push(args); return { saved: true, revision: 1, restarting: false } } },
+  expect(unauthorizedBot.status).toBe(403)
+  const malformedBot = await fetch(`${base}/orchestrator/api/setup/feishu`, {
+    method: 'POST', headers, body: '{"appSecret":"do-not-return-this",bad'
   })
-  expect(await call('PUT', 'prompts', { config: {}, baseRevision: 2 }))
-    .toEqual({ status: 409, body: { error: 'Prompt version changed to 3; compare the latest version before saving' } })
-  const value = { prepare: 'x'.repeat(128 * 1024) }
-  expect(await call('PUT', 'settings/executor', { value, revision: 0 })).toEqual({ status: 400,
-    body: { error: `Request exceeds ${128 * 1024} bytes` } })
-  expect(saves).toEqual([])
+  expect(malformedBot.status).toBe(400)
+  expect(await malformedBot.text()).not.toContain('do-not-return-this')
+  const botResponse = await fetch(`${base}/orchestrator/api/setup/feishu`, {
+    method: 'POST', headers, body: JSON.stringify(botRequest)
+  })
+  expect(botResponse.status).toBe(200)
+  expect(botResponse.headers.get('cache-control')).toBe('no-store')
+  expect(await botResponse.json()).toEqual({bot:{appId:'cli_fixture',brand:'feishu',botId:'ou_fixture',name:'Fixture bot'},saved:false,restarting:false})
+  const state = await (await fetch(`${base}/orchestrator/api/state`, { headers })).json()
+  expect(state.setup.problem).toBeNull()
+  expect(state.setup.accounts).not.toHaveProperty('repository')
+  const rejected = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST',
+    headers: { ...headers, origin: 'https://untrusted.example' },
+    body: JSON.stringify({ text: 'untrusted' })
+  })
+  expect(rejected.status).toBe(403)
+  const response = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ text: 'Prepare a local summary' })
+  })
+  expect(response.status).toBe(200)
+  expect(
+    app.runtime.store.read
+      .triggers({}, 0, 10)
+      .items.some((t) => t.source === 'panel' && t.text === 'Prepare a local summary')
+  ).toBe(true)
+  const original = app.runtime.store.read.triggers({}, 0, 10).items.find((t) => t.text === 'Prepare a local summary')!
+  const ticketId = app.runtime.engine.decide(original.id, {
+    kind: 'accept',
+    title: 'Summary',
+    scope: 'Summary',
+    reason: 'Operator request',
+    name: 'summary',
+    acknowledgement: 'Received.'
+  }).ticketId!
+  const supplemental = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sessionId: `worker-${ticketId}`, text: 'Include a title' })
+  })
+  expect(supplemental.status).toBe(200)
+  expect(app.runtime.store.tickets.get(ticketId)!.inputs.some((i) => i.kind === 'trigger')).toBe(true)
+  app.runtime.engine.stopTicket(ticketId)
+  const stopped = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ sessionId: `worker-${ticketId}`, text: 'Do not create this' })
+  })
+  expect(stopped.status).toBe(400)
+  expect(app.runtime.store.read.triggers({}, 0, 100).items.some((t) => t.text === 'Do not create this')).toBe(false)
 })

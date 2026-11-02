@@ -1,58 +1,247 @@
-/** Browser plugin entry point registering the sidebar icon, main management panel, and Plugin Manager config view. */
-import { useCallback, useEffect, useRef } from 'react'
-import type { Context } from '@deepseek-ai/cordis'
-import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
-import type { SidebarPanelIconOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { openKnownSession, SessionNavigationError } from '../navigation.ts'
+import { useEffect, useState } from 'react'
+import { createRoot } from 'react-dom/client'
 import { App } from './app.tsx'
-import { PluginConfig, usePageForm } from './deployment.tsx'
-import { en, zh } from './locales.ts'
+import { Button } from './controls.tsx'
+import { zh, en } from './locales.ts'
 import type { T } from './text.ts'
-
-type ClientContext = Context & { sessions: ISessions }
-const NS = 'dshSuperagent'
-const PANEL_ID = 'dsh-superagent' as MainPanelId
-const ENTRY = 'dsh-superagent'
-
-function HammerIcon({ size }: SidebarPanelIconOwnerProps) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M6 3.5h9l3.5 1.75v2.5L15 9.5H6a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z" /><path d="M10 9.5v10.25a1.75 1.75 0 0 0 3.5 0V9.5" /><path d="M10 15.5h3.5" />
-  </svg>
+import type { AgentSession, Approval } from '../app/agent-runtime.ts'
+import './client.css'
+import './standalone.css'
+async function request(path: string, value?: unknown) {
+  const r = await fetch(`/orchestrator/api/${path}`, {
+    method: value === undefined ? 'GET' : 'POST',
+    headers: { 'x-orchestrator-request': '1', 'content-type': 'application/json' },
+    ...(value === undefined ? {} : { body: JSON.stringify(value) })
+  })
+  const body = await r.json()
+  if (!r.ok) throw new Error(body.error ?? r.statusText)
+  return body
 }
-
-/** Mounted panel wrapper; cancels any pending Session navigation when a new one starts or the panel unmounts. */
-function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
-  const pending = useRef<AbortController>(undefined)
-  useEffect(() => () => { pending.current?.abort() }, [])
-  const openSession = useCallback(async (id: string) => {
-    pending.current?.abort()
-    const request = new AbortController(); pending.current = request
-    try {
-      await openKnownSession(ctx.sessions, id as SessionId, target => { ctx.uiWorkspace.openSession(target) }, request.signal)
-    } catch (error) {
-      if (error instanceof SessionNavigationError) throw new Error(t(error.code === 'not-ready' ? 'sessionListNotReady' : 'sessionNotListed'))
-      throw error
+function Root() {
+  const [session, setSession] = useState<string>(),
+    [data, setData] = useState<{
+      masterId?: string
+      sessions: AgentSession[]
+      approvals: Approval[]
+      replies: { id: string; text: string }[]
+    }>({ sessions: [], approvals: [], replies: [] }),
+    [text, setText] = useState(''),
+    [error, setError] = useState(''),
+    [connectionError, setConnectionError] = useState(''),
+    [busy, setBusy] = useState(false),
+    [files, setFiles] = useState<string[]>(),
+    [language, setLanguage] = useState<'zh' | 'en'>(() =>
+      localStorage.getItem('superagent-language') === 'en' ? 'en' : 'zh'
+    )
+  const t: T = (key, values) => {
+    let value = (language === 'zh' ? zh : en)[key]
+    for (const [k, v] of Object.entries(values ?? {})) value = value.replaceAll(`{${k}}`, String(v))
+    return value
+  }
+  useEffect(() => {
+    let disposed = false
+    const load = async () => {
+      try {
+        const next = await request('sessions')
+        if (!disposed) {
+          setData(next)
+          setConnectionError('')
+        }
+      } catch (e) {
+        if (!disposed) setConnectionError(String(e))
+      }
     }
-  }, [ctx, t])
-  const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
-  return <App t={t} openSession={openSession} deploymentForm={form} />
+    void load()
+    const timer = setInterval(() => void load(), 1000)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
+  }, [])
+  useEffect(() => {
+    setFiles(undefined)
+  }, [session])
+  const current = data.sessions.find((s) => s.id === session),
+    ticket = session?.startsWith('worker-') ? session.slice(7) : undefined
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <header className="sa-header">
+        <strong>Feishu Superagent</strong>
+        <nav aria-label={t('app.sessions')}>
+          <Button onClick={() => setSession(undefined)}>{t('app.panel')}</Button>
+          <Button onClick={() => setSession(data.masterId ?? 'main')}>{t('app.main')}</Button>
+        </nav>
+        <select
+          className="dt-select sa-language"
+          aria-label={t('app.language')}
+          value={language}
+          onChange={(e) => {
+            const next = e.target.value as 'zh' | 'en'
+            setLanguage(next)
+            localStorage.setItem('superagent-language', next)
+          }}
+        >
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </header>
+      {(error || connectionError) && (
+        <p className="dt-banner dt-danger sa-notice" role="alert">
+          {error || connectionError}
+        </p>
+      )}
+      {data.approvals
+        .filter((a) => a.state === 'pending')
+        .map((a) => (
+          <section key={a.id} className="dt-banner sa-notice">
+            <strong>
+              {t('app.approval')} · {a.sessionId}
+            </strong>
+            {a.method === 'item/permissions/requestApproval' && <p>{t('app.permissionScope')}</p>}
+            <pre className="sa-text">{JSON.stringify(a.detail, null, 2)}</pre>
+            <div className="dt-actions">
+              <Button disabled={busy} onClick={() => void act(() => request('approval', { id: a.id, accept: true }))}>
+                {t('app.approve')}
+              </Button>
+              <Button disabled={busy} onClick={() => void act(() => request('approval', { id: a.id, accept: false }))}>
+                {t('app.reject')}
+              </Button>
+            </div>
+          </section>
+        ))}
+      {session ? (
+        <main className="sa-chat">
+          <div className="dt-head">
+            <h1>{current?.title ?? t('app.main')}</h1>
+            {current && <span className="dt-hint">{t(`app.status.${current.status}`)}</span>}
+          </div>
+          <select
+            className="dt-select"
+            aria-label={t('app.sessions')}
+            value={session}
+            onChange={(e) => setSession(e.target.value)}
+          >
+            {data.sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title}
+              </option>
+            ))}
+          </select>
+          {current?.error && <p className="dt-banner dt-danger">{current.error}</p>}
+          {!current && <p className="dt-hint">{t('app.noSession')}</p>}
+          {current?.messages.length === 0 && <p className="sa-empty">{t('app.empty')}</p>}
+          <div className="sa-transcript" aria-live="polite">
+            {current?.messages.map((m) =>
+              m.role === 'tool' || m.role === 'system' ? (
+                <details key={m.id} className="sa-message">
+                  <summary>
+                    {t(`app.role.${m.role}`)} · {m.at}
+                  </summary>
+                  <pre className="sa-text">{m.text}</pre>
+                </details>
+              ) : (
+                <article className={`sa-message sa-message-${m.role}`} key={m.id}>
+                  <small className="dt-hint">
+                    {t(`app.role.${m.role}`)} · {m.at}
+                  </small>
+                  <pre className="sa-text">{m.text}</pre>
+                </article>
+              )
+            )}
+            {current?.role === 'orchestrator' &&
+              data.replies.map((r) => (
+                <article className="sa-message" key={r.id}>
+                  <strong>{t('app.reply')}</strong>
+                  <p className="sa-text">{r.text}</p>
+                </article>
+              ))}
+          </div>
+          <form
+            className="sa-composer"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void act(async () => {
+                await request('session/message', { sessionId: session, text })
+                setText('')
+              })
+            }}
+          >
+            <textarea
+              className="dt-textarea"
+              aria-label={t('app.message')}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={4}
+            />
+            <Button type="submit" variant="primary" disabled={busy || !text.trim() || !current}>
+              {t('app.send')}
+            </Button>
+          </form>
+          {ticket && (
+            <section className="dt-section">
+              <Button
+                onClick={() =>
+                  void act(async () =>
+                    setFiles((await request(`artifacts?ticket=${encodeURIComponent(ticket)}`)).files)
+                  )
+                }
+              >
+                {t('app.artifacts')}
+              </Button>
+              <p className="dt-hint">{t('app.fileAccess')}</p>
+              {files?.length === 0 && <p className="dt-hint">{t('app.noArtifacts')}</p>}
+              {files?.map((file) => (
+                <Button
+                  key={file}
+                  onClick={() =>
+                    void act(async () => {
+                      const r = await fetch(
+                        `/orchestrator/api/artifact?ticket=${encodeURIComponent(ticket)}&path=${encodeURIComponent(file)}`,
+                        { headers: { 'x-orchestrator-request': '1' } }
+                      )
+                      if (!r.ok) throw new Error(t('app.downloadFailed'))
+                      const url = URL.createObjectURL(await r.blob()),
+                        a = document.createElement('a')
+                      a.href = url
+                      a.download = file.split('/').at(-1)!
+                      a.click()
+                      setTimeout(() => URL.revokeObjectURL(url), 1000)
+                    })
+                  }
+                >
+                  {file}
+                </Button>
+              ))}
+            </section>
+          )}
+          {data.approvals.some((a) => a.sessionId === session) && (
+            <details>
+              <summary>{t('app.approvalHistory')}</summary>
+              {data.approvals
+                .filter((a) => a.sessionId === session)
+                .map((a) => (
+                  <p key={a.id}>
+                    {a.at} · {t(`app.approval.${a.state}`)}
+                  </p>
+                ))}
+            </details>
+          )}
+        </main>
+      ) : (
+        <App t={t} deploymentForm={undefined} openSession={async (id) => setSession(id)} />
+      )}
+    </>
+  )
 }
-
-export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']
-/** Registers the panel, sidebar icon, and Plugin Manager config view; `configForms` is optional (without it, machine settings are read-only). */
-export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-superagent: dictionaries')
-  const t = ctx.locale.bind(NS)
-  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID, locale: NS, inject: () => ({}) },
-    (props: { t: T }) => <Mounted ctx={ctx} t={props.t} />))
-  ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 10, label: () => t('panel'), locale: NS }, HammerIcon))
-  ctx.slots.inject('plugins.row.config', () => ctx.slots.register({ name: 'plugins.row.config', key: `${ENTRY}#${ENTRY}`, locale: NS },
-    (props: PluginConfigViewProps & { t: T }) => <PluginConfig t={props.t} view={props.view} form={props.form} />))
-}
+createRoot(document.getElementById('root')!).render(<Root />)

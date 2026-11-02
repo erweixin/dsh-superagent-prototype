@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest'
 import { zh } from '../src/client/locales.ts'
 import { decisionMark, reportDot, sourceMark, threadMark, ticketMark } from '../src/client/marks.ts'
-import { translator } from './fixtures/panel.tsx'
+import type { T } from '../src/client/text.ts'
+const translator=(d:Record<string,string>):T=>(key,values)=>Object.entries(values??{}).reduce((s,[k,v])=>s.replaceAll(`{${k}}`,String(v)),d[key]??key)
 
 const t = translator(zh)
 
@@ -16,7 +17,7 @@ it('marks each Ticket stage by whom it waits for, and an ended Ticket by its out
     ['执行中', 'info', 'ongoing', 'running'], ['等待新触发', 'neutral', 'idle', 'clock']])
   const ended = (['completed', 'merged', 'closed', 'dropped', 'stopped'] as const).map(outcome => ticketMark(t, { stage: 'ended',
     ended: { at: '', by: outcome === 'stopped' ? 'human' : 'executor', outcome } }))
-  expect(ended.map(mark => mark.label)).toEqual(['已完成', 'PR 已合并', 'PR 已关闭（未合并）', '无需处理', '人工停止'])
+  expect(ended.map(mark => mark.label)).toEqual(['已完成', '已合并', '已关闭', '无需处理', '人工停止'])
   expect(new Set(ended.map(({ tone, dot, icon }) => `${tone} ${dot} ${icon}`))).toEqual(new Set(['neutral idle stop']))
   expect(['failed', 'blocked', 'waiting', 'ready', 'progress', undefined].map(reportDot)).toEqual(['error', 'warning', 'warning', 'done',
     'ongoing', 'ongoing'])

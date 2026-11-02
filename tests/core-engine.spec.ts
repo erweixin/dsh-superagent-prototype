@@ -713,7 +713,7 @@ describe('interrupted assignments', () => {
     const ticket = h.repo.tickets.get(interrupted)!
     expect(ticket.assignments).toEqual([expect.objectContaining({ id: first.id, state: 'ended', endedReason: 'hostRestarted' }),
       expect.objectContaining({ state: 'pending' })])
-    expect(ticket.inputs).toEqual([expect.objectContaining({ kind: 'text', text: expect.stringContaining('The host restarted') })])
+    expect(ticket.inputs).toEqual([expect.objectContaining({ kind: 'text', text: expect.stringContaining('The service restarted') })])
     expect(ticket.undelivered).toEqual([ticket.inputs[0]!.id])
     expect(h.executor.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: interrupted }), ticket.assignments[1])
     // A worker that waits keeps its Session and gets what waits for it.
