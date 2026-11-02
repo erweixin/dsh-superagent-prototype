@@ -35,7 +35,7 @@ For example, “Could we add a dark mode?” should arrive as that original requ
 Do not translate worker questions into your own technical decisions.
 
 Check ticket summaries after compaction to avoid duplicate work.
-Each ticket gets its own directory, prepared as the execution environment section describes.
+By default each ticket gets its own directory, prepared as the execution environment section describes. A candidate with workspace metadata is bound by the local operator to an existing project and one persistent group Worker. Route distinct requests as separate tickets; they queue on that Worker. Attach follow-ups to the relevant ticket as usual. Do not change the binding or treat it as broader task authorization.
 An accept is idempotent by trigger ID.
 An accept or attach takes an optional routing note of at most 30 words, counted with Chinese word segmentation for mixed text.
 Use it only for routing background or explicit human constraints, not implementation instructions.

@@ -21,11 +21,12 @@ function Root() {
   const [session, setSession] = useState<string>(),
     [data, setData] = useState<{
       masterId?: string
-      sessions: AgentSession[]
+      sessions: (AgentSession & { ticketId?: string })[]
       approvals: Approval[]
       replies: { id: string; text: string }[]
     }>({ sessions: [], approvals: [], replies: [] }),
     [text, setText] = useState(''),
+    [draftTicket, setDraftTicket] = useState<string>(),
     [error, setError] = useState(''),
     [connectionError, setConnectionError] = useState(''),
     [busy, setBusy] = useState(false),
@@ -58,11 +59,10 @@ function Root() {
       clearInterval(timer)
     }
   }, [])
-  useEffect(() => {
-    setFiles(undefined)
-  }, [session])
   const current = data.sessions.find((s) => s.id === session),
-    ticket = session?.startsWith('worker-') ? session.slice(7) : undefined
+    ticket = current?.ticketId
+  useEffect(() => { setFiles(undefined) }, [session, ticket])
+  useEffect(() => { setText(''); setDraftTicket(undefined) }, [session])
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true)
     setError('')
@@ -138,6 +138,7 @@ function Root() {
               </option>
             ))}
           </select>
+          {ticket && <p className="dt-hint">{t('app.currentTicket', { ticket })}<br />{current?.cwd}</p>}
           {current?.error && <p className="dt-banner dt-danger">{current.error}</p>}
           {!current && <p className="dt-hint">{t('app.noSession')}</p>}
           {current?.messages.length === 0 && <p className="sa-empty">{t('app.empty')}</p>}
@@ -172,7 +173,7 @@ function Root() {
             onSubmit={(e) => {
               e.preventDefault()
               void act(async () => {
-                await request('session/message', { sessionId: session, text })
+                await request('session/message', { sessionId: session, ticketId: draftTicket, text })
                 setText('')
               })
             }}
@@ -181,9 +182,10 @@ function Root() {
               className="dt-textarea"
               aria-label={t('app.message')}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => { if (!text) setDraftTicket(ticket); setText(e.target.value) }}
               rows={4}
             />
+            {text && draftTicket !== ticket && <p role="alert">{t('app.draftTicketChanged')}</p>}
             <Button type="submit" variant="primary" disabled={busy || !text.trim() || !current}>
               {t('app.send')}
             </Button>

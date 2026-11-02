@@ -782,6 +782,8 @@ const TEXT = {
   "app.approval.expired": ["已失效，需重新发起", "Expired; request again"],
   "app.fileAccess": ["文件仅在运行此服务的机器上，可在此下载；飞书中的本机路径不是下载链接。", "Files are local to this service. Download them here; local paths in Feishu are not download links."],
   'app.permissionScope': ['本次额外权限在当前轮次结束时失效。', 'These additional permissions expire at the end of the current turn.'],
+  'app.currentTicket': ['当前工单：{ticket}', 'Current ticket: {ticket}'],
+  'app.draftTicketChanged': ['Worker 已切换工单。此草稿仍关联原工单，发送会被拒绝；请清空后为当前工单重新输入。', 'The Worker changed tickets. This draft still targets the previous ticket and will be rejected. Clear it and enter input for the current ticket.'],
 } as const satisfies Record<string, readonly [string, string]>
 export type SuperagentKey = keyof typeof TEXT
 const language = (index: 0 | 1) => Object.fromEntries(Object.entries(TEXT).map(([key, pair]) => [key, pair[index]])) as Record<SuperagentKey, string>

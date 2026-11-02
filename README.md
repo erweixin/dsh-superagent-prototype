@@ -33,7 +33,7 @@ Pass another configuration file with `npm start -- /absolute/path/config.json`. 
 
 ## Operation
 
-Each ticket has a private working directory and a persistent Codex thread. The domain Engine owns authorization and ticket lifecycle; ending a Codex turn does not imply a successful result. Codex permissions default to read-only for the router and workspace-write for workers. Extra permissions require an explicit local-panel approval. The panel is local-only and has no remote-user authentication.
+By default each ticket has a private working directory and a persistent Codex thread. In Settings → Sources → Feishu → Chats, an optional project directory binds that chat to an existing project and a fixed Worker. Its tasks run serially and share the same Codex conversation; saving the binding grants workspace-write access to that directory. The domain Engine owns authorization and ticket lifecycle; ending a Codex turn does not imply a successful result. Codex permissions default to read-only for the router and workspace-write for workers. Extra permissions require an explicit local-panel approval. The panel is local-only and has no remote-user authentication.
 
 Feishu uses the configured bot identity, including history recovery, original-message reads, images, member synchronization, and replies. Ordinary output goes through the durable Outbox. Local artifacts can be downloaded from the worker session page; local paths are not remote Feishu links.
 

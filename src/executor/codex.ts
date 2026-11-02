@@ -1,4 +1,4 @@
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, stat, realpath } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -22,8 +22,9 @@ import { Later, type Effects } from '../app/effects.ts'
 import { executionRoot } from '../app/execution-environment.ts'
 import { TaskNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
-export const workerSessionId = (id: string) => `worker-${id}`
-export const ticketOfSession = (id: string) => (id.startsWith('worker-') ? id.slice(7) : undefined)
+import { workerSessionId, ticketOfSession } from '../app/worker-sessions.ts'
+import { KV } from '../kv.ts'
+export { workerSessionId, ticketOfSession } from '../app/worker-sessions.ts'
 const ticketDirectoryName = (name: string, id: string) => `${TaskNameSchema.parse(name)}-${id.slice(0, 12)}`
 interface ExecutorHost {
   store: Store
@@ -37,6 +38,7 @@ interface ExecutorHost {
   environment(ticket: Ticket): { key: string; value: string }[]
   sourceLink(t: Trigger): Promise<{ source_url?: string; source_url_read?: string }>
   repliedTo(t: Trigger): Trigger | undefined
+  workspace?(t: Trigger): { source: string; key: string; directory: string } | undefined
 }
 /** Looks up a ticket's origin trigger in Store. */
 export const sourceTrigger = (host: { store: Pick<Store, 'triggers'> }, ticket: Ticket): Trigger | undefined =>
@@ -222,13 +224,14 @@ export class CodexExecutor implements Executor {
   private disposeEvents?: () => void
   private launching = new Set<string>()
   private stopping = new Map<string, Promise<void>>()
+  private reservations = new Map<string, string>()
   constructor(private host: ExecutorHost) {
     this.slots = new WorkerSlots(
       () =>
         host.sessions.runtime
           .list()
           .filter((s) => s.role === 'worker' && s.status === 'running')
-          .map((s) => ticketOfSession(s.id)!),
+          .map((s) => ticketOfSession(s.id, host.store)!).filter(Boolean),
       () => host.store.settings().executor.maxWorkers
     )
     host.effects.handle('launch', (p) => this.launch(p.ticketId, p.assignmentId), {
@@ -240,9 +243,16 @@ export class CodexExecutor implements Executor {
     })
   }
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>) {
+    const trigger = sourceTrigger(this.host, ticket)
+    const binding = trigger && this.host.workspace?.(trigger)
+    const execution = ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir)
+    if (binding) {
+      execution.directory = binding.directory
+      execution.workspace = { ...binding, sessionId: `group-worker-${key(binding.source, binding.key, binding.directory)}` }
+    }
     return {
       ...ticket,
-      execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir)
+      execution
     }
   }
   start(ticket: Ticket, a: Assignment) {
@@ -253,17 +263,23 @@ export class CodexExecutor implements Executor {
   }
   stop(ticket: Ticket, _a: Assignment, _reason: string) {
     this.host.store.afterCommit(() => {
-      const previous = this.stopping.get(ticket.id)
+      const sessionId = workerSessionId(ticket)
+      // A queued ticket may be stopped while another ticket owns this group Worker.
+      if (ticketOfSession(sessionId, this.host.store) !== ticket.id) return
+      const previous = this.stopping.get(sessionId)
       const pending = new Promise<void>((resolve) => setTimeout(resolve, 0))
         .then(() => previous)
-        .then(() => this.host.sessions.runtime.interrupt(workerSessionId(ticket.id)))
+        .then(() => {
+          if (ticketOfSession(sessionId, this.host.store) === ticket.id)
+            return this.host.sessions.runtime.interrupt(sessionId)
+        })
         .catch((error) => {
           if (!this.host.closing()) this.failed(ticket.id, error)
         })
         .finally(() => {
-          if (this.stopping.get(ticket.id) === pending) this.stopping.delete(ticket.id)
+          if (this.stopping.get(sessionId) === pending) this.stopping.delete(sessionId)
         })
-      this.stopping.set(ticket.id, pending)
+      this.stopping.set(sessionId, pending)
     })
   }
 
@@ -279,19 +295,45 @@ export class CodexExecutor implements Executor {
       this.host.sessions.relay(r.id, r.text)
     })
   }
+  /** Reserve before awaiting anything; ownership survives idle turns and service restarts. */
+  private reserve(ticket: Ticket, by: 'launch' | 'wake' | 'person') {
+    const sessionId = workerSessionId(ticket), store = this.host.store
+    if (this.reservations.has(sessionId)) throw new Later('Worker startup is in progress')
+    const ownerId = ticketOfSession(sessionId, store)
+    const owner = ownerId && store.tickets.get(ownerId)
+    if (owner && owner.id !== ticket.id && liveTicket(owner)) throw new Later('Group Worker is assigned to another ticket')
+    if (ticket.execution?.workspace && (!owner || !liveTicket(owner))) {
+      const next = store.tickets.open().reverse().find(candidate => workerSessionId(candidate) === sessionId)
+      if (next && next.id !== ticket.id) throw new Later('An earlier group ticket is waiting')
+    }
+    if (ownerId !== ticket.id || this.host.sessions.runtime.get(sessionId)?.status !== 'running') this.slots.reserve(ticket.id, by)
+    this.reservations.set(sessionId, ticket.id)
+  }
+  private async bind(ticket: Ticket) {
+    const sessionId = workerSessionId(ticket), store = this.host.store
+    await this.stopping.get(sessionId)
+    if (ticket.execution?.workspace && ticketOfSession(sessionId, store) !== ticket.id) {
+      // Drain old subprocesses and tools before changing ownership or restoring the thread.
+      await this.host.sessions.runtime.interrupt(sessionId)
+      store.set(KV.sessions.ticket(sessionId), ticket.id)
+    }
+  }
   private async launch(id: string, assignmentId: string) {
-    await this.stopping.get(id)
     const h = this.host,
       t = h.store.tickets.get(id)
     if (!t || !liveTicket(t) || latestAssignment(t)?.id !== assignmentId) return
-    this.slots.reserve(id, 'launch')
+    this.reserve(t, 'launch')
     this.launching.add(id)
     try {
+      await this.bind(t)
       const cwd = t.execution!.directory
+      if (t.execution!.workspace && (await realpath(cwd) !== cwd || !(await stat(cwd)).isDirectory()))
+        throw new Error('Bound project directory changed; restore it before retrying')
       const exists = await stat(cwd).then(
         () => true,
         () => false
       )
+      if (!exists && t.execution!.workspace) throw new Error('Bound project directory no longer exists')
       if (!exists) {
         await mkdir(dirname(cwd), { recursive: true })
         const command = h.store.settings().executor.prepare
@@ -304,16 +346,18 @@ export class CodexExecutor implements Executor {
           })
         await mkdir(cwd, { recursive: true })
       }
-      await h.sessions.ensure(workerSessionId(id), cwd, t.title, 'worker')
+      await h.sessions.ensure(workerSessionId(t), cwd, t.execution?.workspace ? `Group ${t.execution.workspace.key} · ${cwd}` : t.title, 'worker')
       const current = h.store.tickets.get(id)
       if (!current || !liveTicket(current) || latestAssignment(current)?.id !== assignmentId) return
       const trigger = sourceTrigger(h, t)
       h.engine.assignmentStarted(id, assignmentId)
       await h.sessions.prompt(
-        workerSessionId(id),
+        workerSessionId(t),
         `assignment:${assignmentId}`,
         JSON.stringify({
           ticket_id: id,
+          ...(t.execution?.workspace ? { workspace: t.execution.workspace,
+            authorization: 'Only this ticket is active. Earlier conversation is context, not authorization. Do not repeat completed work or act on earlier tickets. Report this ticket before taking another request.' } : {}),
           title: t.title,
           assignment: t.execution!.assignment,
           trigger: trigger ? triggerMessage(trigger, await h.sourceLink(trigger)) : undefined,
@@ -326,11 +370,11 @@ export class CodexExecutor implements Executor {
       this.failed(id, e)
     } finally {
       this.launching.delete(id)
+      this.reservations.delete(workerSessionId(t))
       this.slots.free(id)
     }
   }
   private async deliverQueued(id: string) {
-    await this.stopping.get(id)
     if (this.launching.has(id)) throw new Later('Initial assignment delivery is still in progress')
     const h = this.host
     let t = h.store.tickets.get(id)
@@ -339,10 +383,13 @@ export class CodexExecutor implements Executor {
     const person = t.inputs.some(
       (input) => t!.undelivered.includes(input.id) && input.kind === 'trigger' && input.human && !input.context
     )
-    if (h.sessions.runtime.get(workerSessionId(id))?.status !== 'running')
-      this.slots.reserve(id, person ? 'person' : 'wake')
+    this.reserve(t, person ? 'person' : 'wake')
+    const sessionId = workerSessionId(t)
     try {
-      await h.sessions.ensure(workerSessionId(id), t.execution!.directory, t.title, 'worker')
+      await this.bind(t)
+      if (t.execution?.workspace && await realpath(t.execution.directory) !== t.execution.directory)
+        throw new Error('Bound project directory changed')
+      await h.sessions.ensure(sessionId, t.execution!.directory, t.title, 'worker')
       while ((t = h.store.tickets.get(id)) && liveTicket(t) && t.undelivered.length) {
         const a = runningAssignment(t)
         if (!a) return
@@ -351,13 +398,13 @@ export class CodexExecutor implements Executor {
         const trigger = input.kind === 'trigger' ? h.store.triggers.get(input.triggerId) : undefined
         const text = inputMessage(input, trigger ? triggerMessage(trigger, await h.sourceLink(trigger)) : undefined)
         if (text)
-          await h.sessions.prompt(workerSessionId(id), input.id, text, 'steer', () => {
+          await h.sessions.prompt(sessionId, input.id, text, 'steer', () => {
             const current = h.store.tickets.get(id)
             if (!current || !liveTicket(current) || runningAssignment(current)?.id !== a.id)
               throw new Error('Assignment changed')
           })
         h.engine.inputsDelivered(id, a.id, [input.id])
-        if (h.sessions.runtime.get(workerSessionId(id))?.consumed?.includes(input.id))
+        if (h.sessions.runtime.get(sessionId)?.consumed?.includes(input.id))
           h.engine.inputsRead(id, [input.id])
       }
     } catch (e) {
@@ -365,12 +412,13 @@ export class CodexExecutor implements Executor {
       if (a) h.engine.deliveryFailed(id, a.id, String(e))
       throw e
     } finally {
+      this.reservations.delete(sessionId)
       this.slots.free(id)
     }
   }
   install() {
     this.disposeEvents = this.host.sessions.runtime.subscribe((e) => {
-      const id = ticketOfSession(e.sessionId),
+      const id = ticketOfSession(e.sessionId, this.host.store),
         t = id ? this.host.store.tickets.get(id) : undefined,
         a = t && runningAssignment(t)
       if (!id || !t || !a || !liveTicket(t)) return

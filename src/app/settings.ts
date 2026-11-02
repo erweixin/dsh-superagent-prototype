@@ -1,6 +1,8 @@
 import type { AgentRuntime } from './agent-runtime.ts'
 /** Block-scoped settings validation, optimistic concurrency saves, processing pause control, and source policy synchronization. */
 import { z } from 'zod'
+import { realpath, stat, access } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { UserError, type EngineForSettings } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
@@ -164,6 +166,17 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
+    const oldWorkspaces = sources.workspaces(current), newWorkspaces = sources.workspaces(candidate)
+    if (JSON.stringify(oldWorkspaces) !== JSON.stringify(newWorkspaces)) {
+      if (origin !== 'panel') throw new UserError('panelOnlyEnvironment')
+      for (const binding of newWorkspaces) {
+        if (oldWorkspaces.some(old => JSON.stringify(old) === JSON.stringify(binding))) continue
+        const canonical = await realpath(binding.directory)
+        if (canonical !== binding.directory) throw new Error(`Use the real project directory: ${canonical}`)
+        if (!(await stat(canonical)).isDirectory()) throw new Error('Project path must be a directory')
+        await access(canonical, constants.R_OK | constants.W_OK | constants.X_OK)
+      }
+    }
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // Re-read current settings after async checks in case unrelated blocks were saved concurrently.

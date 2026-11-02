@@ -106,6 +106,17 @@ export class SourceRegistry implements SourceScope {
     return { threads: [...new Set(found.flatMap(item => item.threads))], terms: [...new Set(found.flatMap(item => item.terms))] }
   }
   repliesTo(trigger: Trigger): string | undefined { return this.kinds.get(trigger.source)?.repliesTo?.(trigger) }
+  workspaces(settings = this.settings()) {
+    return this.instances(settings).flatMap(instance =>
+      (this.kind(instance.kind)?.workspaces?.(instance.config) ?? []).map(binding => ({ source: instance.id, ...binding })))
+      .sort((a, b) => `${a.source}:${a.key}`.localeCompare(`${b.source}:${b.key}`))
+  }
+  workspace(trigger: Trigger) {
+    const instance = this.instance(trigger.source)
+    if (!instance?.enabled) return undefined
+    const scope = this.kind(instance.kind)?.workspaceKey?.(trigger)
+    return this.workspaces().find(binding => binding.source === trigger.source && binding.key === scope)
+  }
   threadContext(trigger: Trigger, settings = this.settings()): TriggerContext | undefined {
     const kind = this.kinds.get(trigger.source)
     const context = kind?.threadContext

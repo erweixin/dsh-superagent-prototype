@@ -13,3 +13,5 @@ SQLite preserves the existing aggregate tables, settings revisions, prompt revis
 The web panel preserves the existing management pages and adds session conversations, approvals and artifact downloads. Business commands call Engine. Local worker messages are saved as ticket inputs; they do not bypass task state tracking.
 
 Testing combines the retained core, storage, effect, policy and Feishu-read tests with a deterministic stdio app-server fixture. New tests cover protocol messages, duplicate delivery, interrupted sessions, expired approvals and path confinement. Real-account tests are separate operational checks.
+
+Workspace binding is a source extension port (`workspaces` and `workspaceKey`), not a Feishu dependency in Engine. The application validates operator-only directory grants. Execution stores the immutable binding snapshot; a typed session-ticket KV record stores the shared Worker's current owner. Provider threads, per-ticket authorization and domain task records remain separate.

@@ -1,7 +1,9 @@
-import { afterEach, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { afterEach, expect, it, vi } from 'vitest'
+import { mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { panelTrigger } from '../src/sources/panel.ts'
+import { workerSessionId } from '../src/app/worker-sessions.ts'
 import { startApplication } from '../src/index.ts'
 let app: Awaited<ReturnType<typeof startApplication>> | undefined, root: string | undefined
 afterEach(async () => {
@@ -85,4 +87,28 @@ it('serves a standalone panel, enforces same origin, and records local requests 
   })
   expect(stopped.status).toBe(400)
   expect(app.runtime.store.read.triggers({}, 0, 100).items.some((t) => t.text === 'Do not create this')).toBe(false)
+  const kind = app.runtime.sources.kind('panel')!
+  kind.workspaces = () => [{ key: 'group', directory: realpathSync(app!.runtime.machine.stateDir) }]
+  kind.workspaceKey = () => 'group'
+  const groupTrigger = panelTrigger('KEEP_RUNNING')
+  app.runtime.receive(groupTrigger)
+  const groupTicket = app.runtime.store.tickets.get(app.runtime.engine.decide(groupTrigger.id, {
+    kind: 'accept', title: 'Group', scope: 'Test', reason: 'Requested', name: 'group'
+  }).ticketId!)!
+  const groupSession = workerSessionId(groupTicket)
+  await app.runtime.pump()
+  await vi.waitFor(() => expect(app!.runtime.sessions.runtime.get(groupSession)).toBeDefined())
+  const snapshot = await (await fetch(`${base}/orchestrator/api/sessions`, { headers })).json()
+  expect(snapshot.sessions.find((item: { id: string }) => item.id === groupSession).ticketId).toBe(groupTicket.id)
+  const staleInput = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST', headers, body: JSON.stringify({sessionId:groupSession,ticketId,text:'Stale group input'})
+  })
+  expect(staleInput.status).toBe(400)
+  expect(app.runtime.store.read.triggers({},0,100).items.some(t=>t.text==='Stale group input')).toBe(false)
+  const currentInput = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST', headers, body: JSON.stringify({sessionId:groupSession,ticketId:groupTicket.id,text:'Current group input'})
+  })
+  expect(currentInput.status).toBe(200)
+  expect(app.runtime.store.tickets.get(groupTicket.id)!.inputs.some(i=>i.kind==='trigger')).toBe(true)
+
 })

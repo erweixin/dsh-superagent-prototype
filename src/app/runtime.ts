@@ -9,7 +9,7 @@ import { Commands } from '../infra/commands.ts'
 import type { Deployment, Machine } from '../deployment.ts'
 import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
 import type { SetupProblem } from '../setup.ts'
-import { CodexExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/codex.ts'
+import { CodexExecutor, sourceTrigger, triggerMessage, ticketOfSession, workerSessionId } from '../executor/codex.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { KV } from '../kv.ts'
@@ -109,8 +109,9 @@ export class Runtime implements SourceHost {
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
       const agents = new CodexRuntime(store, machine.codexPath, id => {
         if (id === masterId) return
-        const ticket = store.tickets.get(id.replace(/^worker-/, ''))
-        if (!ticket || !liveTicket(ticket)) throw new Error('Ticket ended; no further work is authorized')
+        const ticketId = ticketOfSession(id, store)
+        const ticket = ticketId ? store.tickets.get(ticketId) : undefined
+        if (!ticket || !liveTicket(ticket) || workerSessionId(ticket) !== id) throw new Error('Ticket ended; no further work is authorized')
       }, machine.stateDir)
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, agentRuntime: agents,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
@@ -124,7 +125,7 @@ export class Runtime implements SourceHost {
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
       this.executor = new CodexExecutor({ get engine() { return runtime.engine }, store, effects, machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
-        repliedTo: trigger => repliedTo({ store, sources }, trigger) })
+        repliedTo: trigger => repliedTo({ store, sources }, trigger), workspace: trigger => sources.workspace(trigger) })
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
         settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
         deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
@@ -156,7 +157,7 @@ export class Runtime implements SourceHost {
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.disposers.push(agents.subscribe(event => {
         if (event.type !== 'approval' && event.type !== 'approvalResolved') return
-        const ticketId = event.sessionId.startsWith('worker-') ? event.sessionId.slice(7) : undefined
+        const ticketId = ticketOfSession(event.sessionId, store)
         const ticket = ticketId ? store.tickets.get(ticketId) : undefined
         if (!ticket || !liveTicket(ticket)) return
         const question = '请在本机 Superagent 管理面板处理执行权限请求。飞书回复不能批准本机权限。'

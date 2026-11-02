@@ -4,6 +4,7 @@ import { readFile, realpath, readdir, stat } from 'node:fs/promises'
 import { resolve, join, relative, isAbsolute, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { ticketOfSession } from './app/worker-sessions.ts'
 import { Runtime } from './app/runtime.ts'
 import { FeishuBotSetup } from './app/feishu-setup.ts'
 import { machineOf } from './deployment.ts'
@@ -83,7 +84,7 @@ export async function startApplication(configPath = resolve('superagent.config.j
         if (path === 'sessions' && req.method === 'GET') {
           json(res, 200, {
             masterId: runtime.masterId,
-            sessions: agents.list(),
+            sessions: agents.list().map(session => ({ ...session, ticketId: ticketOfSession(session.id, runtime.store) })),
             approvals: agents.approvals(),
             replies: runtime.store.get(panelReplies) ?? []
           })
@@ -98,8 +99,11 @@ export async function startApplication(configPath = resolve('superagent.config.j
             const trigger = panelTrigger(b.text)
             runtime.receive(trigger)
           } else {
-            const ticket = runtime.store.tickets.get(id.replace(/^worker-/, ''))
-            if (!id.startsWith('worker-') || !ticket) throw new Error('Unknown ticket')
+            const ticketId = ticketOfSession(id, runtime.store)
+            const ticket = ticketId ? runtime.store.tickets.get(ticketId) : undefined
+            if (!ticket) throw new Error('Unknown ticket')
+            if (id.startsWith('group-worker-') && b.ticketId !== ticket.id)
+              throw new Error('The group Worker changed tickets. Reload before sending your input.')
             if (ticket.ended?.by === 'human') throw new Error('Ticket was stopped; no further input is authorized')
             const trigger = panelTrigger(b.text, `worker-${ticket.id}`)
             runtime.store.atomic(() => {

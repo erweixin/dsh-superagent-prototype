@@ -1,6 +1,6 @@
 /** Session policies, prompt revisions and durable main-session notices. */
 import { key, liveTicket, type Ticket } from '../core/index.ts'
-import { ticketOfSession, mandateInstructions } from '../executor/codex.ts'
+import { ticketOfSession, workerSessionId, mandateInstructions } from '../executor/codex.ts'
 import type { Agent, AgentRuntime } from './agent-runtime.ts'
 import type { Store } from './store.ts'
 import type { Prompts } from './prompts.ts'
@@ -35,9 +35,9 @@ export class Sessions {
     return this.host.runtime
   }
   async ensure(id: string, cwd: string, title: string, role: 'orchestrator' | 'worker') {
-    const ticketId = ticketOfSession(id),
+    const ticketId = ticketOfSession(id, this.host.store),
       ticket = ticketId ? this.host.store.tickets.get(ticketId) : undefined
-    if (role === 'worker' && (!ticket || !liveTicket(ticket))) throw new Error('Ticket is not authorized')
+    if (role === 'worker' && (!ticket || !liveTicket(ticket) || workerSessionId(ticket) !== id)) throw new Error('Ticket is not authorized')
     const version = this.host.prompts.current(),
       model = role === 'worker' ? this.host.store.settings().executor.model : this.host.store.settings().eval.model
     const instructions =
