@@ -13,7 +13,7 @@ function policyOf(sources: SourceRegistry, id: string, health: HealthMap) {
   const part = sources.policyPart(id)!
   const config = sources.instance(id)?.config ?? {}
   const sync = policy.sync && { label: policy.sync.label, ready: policy.sync.ready(part), health: health[`sync:${id}`] }
-  return { policy: { fields: policy.fields, explicit: policy.explicit, ...policy.rows ? { rows: policy.rows(config) } : {}, ...sync
+  return { policy: { fields: policy.fields, explicit: policy.explicit, ...policy.people ? { people: true } : {}, ...policy.rows ? { rows: policy.rows(config) } : {}, ...sync
     ? { sync } : {} } }
 }
 /**

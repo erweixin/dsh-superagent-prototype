@@ -5,6 +5,8 @@ import { SETUP_FIELDS, resolveFeishuBot, type Deployment, type Machine } from '.
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 const execute = promisify(execFile)
+// Explicitly supported app-server releases; do not assume experimental APIs are forward-compatible.
+const supportedCodexVersions: readonly string[] = ['0.153.4', '0.166.0']
 const fields = (s: Settings) =>
   JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map((k) => s.sources[id]?.config[k] ?? '')))
 export const setupChanged = (before: Settings, after: Settings) => fields(before) !== fields(after)
@@ -34,8 +36,13 @@ export class Setup {
   }
   async run(settings: Settings) {
     try {
-      const version = await this.probe([this.host.machine.codexPath, '--version'])
-      if (!/^codex-cli 0\.153\.4\s*$/m.test(version)) throw new Error('This release requires Codex CLI 0.153.4')
+      const version = (await this.probe([this.host.machine.codexPath, '--version'])).trim()
+      const detected = /^codex-cli (\d+\.\d+\.\d+)$/.exec(version)?.[1]
+      if (!detected || !supportedCodexVersions.includes(detected))
+        throw new Error(
+          `Supported Codex CLI versions: ${supportedCodexVersions.join(', ')}; detected ${JSON.stringify(version)} ` +
+          `from ${JSON.stringify(this.host.machine.codexPath)}. Set codexPath to a supported executable.`
+        )
       await this.probe([this.host.machine.codexPath, 'login', 'status'])
       const feishu = await resolveFeishuBot(this.host.machine, settings.sources.feishu?.config, this.probe).catch(
         (e) => {

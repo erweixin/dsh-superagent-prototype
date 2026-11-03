@@ -71,6 +71,25 @@ function accepted(h: ReturnType<typeof harness>, id = '1', thread = 't1') {
   return decision
 }
 
+it('keeps image references through reports and replies and includes images in reply deduplication', () => {
+  const h = harness()
+  h.engine.receive(trigger('1', { channel: { source: 'feishu', thread: 'topic', address: { messageId: 'om_origin', chatId: 'oc_chat' } } }))
+  h.pump()
+  const ticketId = h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Screenshot', scope: 'Screenshot', reason: 'Requested' }).ticketId!
+  h.settle()
+  const images = [{ imageKey: 'img_screenshot', alt: '登录页' }]
+  const ticket = h.engine.report(ticketId, { state: 'ready', summary: 'Screenshot ready', images })
+  expect(ticket.assignments.at(-1)?.report?.images).toEqual(images)
+  const first = h.engine.reply({ purpose: 'result', ticketId, text: '截图如下。', images })
+  const repeated = h.engine.reply({ purpose: 'result', ticketId, text: '截图如下。', images })
+  expect(repeated.id).toBe(first.id)
+  expect(repeated.reused).toBe(true)
+  expect(h.outbox.find(item => item.id === first.id)?.images).toEqual(images)
+  const changed = h.engine.reply({ purpose: 'result', ticketId, text: '截图如下。', images: [{ imageKey: 'img_other' }] })
+  expect(changed.id).not.toBe(first.id)
+  expect(h.outbox.filter(item => item.kind === 'reply')).toHaveLength(2)
+})
+
 describe('intake', () => {
   it('stores a trigger once and records source filtering', () => {
     const h = harness()

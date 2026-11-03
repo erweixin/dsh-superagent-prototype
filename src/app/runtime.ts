@@ -152,7 +152,7 @@ export class Runtime implements SourceHost {
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { logger, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
+      this.toolHost = { logger, engine, store, commands, prompts, sessions, settings: this.settings, assessor, resources,
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.disposers.push(agents.subscribe(event => {
@@ -160,9 +160,9 @@ export class Runtime implements SourceHost {
         const ticketId = ticketOfSession(event.sessionId, store)
         const ticket = ticketId ? store.tickets.get(ticketId) : undefined
         if (!ticket || !liveTicket(ticket)) return
-        const question = '请在本机 Superagent 管理面板处理执行权限请求。飞书回复不能批准本机权限。'
+        const question = '请在本机 Superagent 管理面板处理执行或应用访问权限请求。飞书回复不能批准本机权限。'
         if (event.type === 'approval') {
-          engine.report(ticket.id, {state:'progress',summary:'Waiting for local execution permission.',question})
+          engine.report(ticket.id, {state:'progress',summary:'Waiting for local execution or application access permission.',question})
           engine.reply({purpose:'attention',ticketId:ticket.id,question,text:question})
           passes.request()
         } else if (ticket.attention?.question === question) engine.report(ticket.id, {state:'progress',summary:'Local permission request resolved.',question:null})

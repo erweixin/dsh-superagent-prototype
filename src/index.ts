@@ -108,7 +108,11 @@ export async function startApplication(configPath = resolve('superagent.config.j
             const trigger = panelTrigger(b.text, `worker-${ticket.id}`)
             runtime.store.atomic(() => {
               runtime.receive(trigger)
-              runtime.engine.attach(ticket.id, trigger.id)
+              // Once subscribed, receive already forwards subsequent panel messages.
+              // Attaching them again rejects a message now owned by this Worker.
+              const reached = runtime.store.triggers.disposition(trigger.id)
+              if (!reached?.fanout.includes(ticket.id) || reached.context?.includes(ticket.id))
+                runtime.engine.attach(ticket.id, trigger.id)
             })
             runtime.pump().catch(console.error)
           }

@@ -2,6 +2,7 @@
 import type { OutboundMessage, Outbox as OutboxPort, ReplyStatus } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { checkedImText } from '../infra/text.ts'
+import { checkedImages } from '../core/message-images.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 import { FAILURES_BEFORE_ERROR, Later, type Effects } from './effects.ts'
 import type { Store } from './store.ts'
@@ -26,7 +27,9 @@ export class Outbox implements OutboxPort {
   /** Record a message receipt and enqueue its delivery effect atomically; duplicate message IDs are ignored. */
   send(message: OutboundMessage): void {
     // Validate IM reply length here; acknowledgements are already validated when decided.
-    if (message.kind === 'reply' && message.channel.source === 'feishu') checkedImText(message.text)
+    const images = checkedImages(message.images)
+    if (images.length && message.channel.source !== 'feishu') throw new Error('Uploaded Feishu images need a Feishu destination')
+    if (message.kind === 'reply' && message.channel.source === 'feishu') checkedImText([message.text, ...images.map(image => image.alt ?? '')].join('\n'))
     const { store, effects } = this.host
     store.atomic(() => { if (store.receipts.add(message)) effects.enqueue('reply', message.id, {}) })
   }

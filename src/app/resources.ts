@@ -272,10 +272,13 @@ const ROUTES: readonly Route[] = [
     } else if (section === 'report' && part) {
       const report = ticket.assignments.find(item => item.id === part)?.report
       if (!report) throw new Error('Unknown assignment report')
-      body = report.summary
+      body = report.images?.length ? JSON.stringify({ summary: report.summary, images: report.images.map(image => ({ image_key: image.imageKey, alt: image.alt })) }) : report.summary
     } else if (part !== undefined) throw new Error('Unknown context resource')
     else if (section === 'assignment') body = ticket.execution?.assignment ?? ''
-    else if (section === 'result') body = latestReport(ticket)?.summary ?? ''
+    else if (section === 'result') {
+      const report = latestReport(ticket)
+      body = report?.images?.length ? JSON.stringify({ summary: report.summary, images: report.images.map(image => ({ image_key: image.imageKey, alt: image.alt })) }) : report?.summary ?? ''
+    }
     else if (section === 'transcript') {
       body = (await transcript(host, id)).flatMap((event, index) => {
         const entry = transcriptEntry(event)

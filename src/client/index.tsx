@@ -106,13 +106,19 @@ function Root() {
         .map((a) => (
           <section key={a.id} className="dt-banner sa-notice">
             <strong>
-              {t('app.approval')} · {a.sessionId}
+              {t(a.elicitation ? 'app.applicationApproval' : 'app.approval')} · {a.sessionId}
             </strong>
             {a.method === 'item/permissions/requestApproval' && <p>{t('app.permissionScope')}</p>}
-            <pre className="sa-text">{JSON.stringify(a.detail, null, 2)}</pre>
+            {a.elicitation && <>
+              <p>{a.elicitation.serverName} · {a.elicitation.message}</p>
+              <p>{t(!a.elicitation.canAccept ? 'app.unsupportedElicitation' : a.elicitation.session ? 'app.applicationSessionScope' : 'app.applicationRequestScope')}</p>
+              {a.elicitation.session && <p>{t('app.applicationAccessWarning')}</p>}
+            </>}
+            {a.elicitation ? <details><summary>{t('app.approvalDetails')}</summary><pre className="sa-text">{JSON.stringify(a.detail, null, 2)}</pre></details>
+              : <pre className="sa-text">{JSON.stringify(a.detail, null, 2)}</pre>}
             <div className="dt-actions">
-              <Button disabled={busy} onClick={() => void act(() => request('approval', { id: a.id, accept: true }))}>
-                {t('app.approve')}
+              <Button disabled={busy || a.elicitation?.canAccept === false} onClick={() => void act(() => request('approval', { id: a.id, accept: true }))}>
+                {t(a.elicitation?.session ? 'app.approveSession' : 'app.approve')}
               </Button>
               <Button disabled={busy} onClick={() => void act(() => request('approval', { id: a.id, accept: false }))}>
                 {t('app.reject')}

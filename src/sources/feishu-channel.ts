@@ -5,6 +5,7 @@ import { checkedImText } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
 import { feishuTriggerId } from './feishu-trigger.ts'
+import { checkedImages } from '../core/message-images.ts'
 
 /** Feishu or Lark AppLink that opens a chat; used when the message's own link was not delivered with the event. */
 export const feishuChatLink = (brand: 'feishu' | 'lark', chatId: string): string =>
@@ -18,10 +19,24 @@ const gone = (error: unknown): boolean => error instanceof CliError && error.cod
 /** Replies in the topic of the target message; Feishu keeps at most one reply per idempotency key (the outgoing message's `message.id`). */
 export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const messageId = message.channel.address.messageId
-  if (!messageId) throw new Error('Missing Feishu reply target')
-  const text = checkedImText(message.text)
-  const reply = ['im', '+messages-reply', '--message-id', messageId, '--markdown', text, '--reply-in-thread', '--idempotency-key', message.id]
-  try { await host.commands.lark(reply) }
+  const chatId = message.channel.address.chatId
+  if (!messageId && !chatId) throw new Error('Missing Feishu reply target')
+  const images = checkedImages(message.images)
+  const text = message.text
+  checkedImText([text, ...images.map(image => image.alt ?? '')].join('\n'))
+  const content = images.length ? ['--msg-type', 'post', '--content', JSON.stringify({ zh_cn: { content: [
+    [{ tag: 'md', text }],
+    ...images.flatMap(image => [
+      [{ tag: 'img', image_key: image.imageKey }],
+      ...(image.alt ? [[{ tag: 'text', text: image.alt }]] : [])
+    ])
+  ] } })] : ['--markdown', text]
+  const reply = ['im', ...(messageId ? ['+messages-reply', '--message-id', messageId, '--reply-in-thread'] : ['+messages-send', '--chat-id', chatId!]),
+    ...content, '--idempotency-key', message.id]
+  try {
+    const result = await host.commands.lark<{ message_id?: string }>(reply)
+    if (images.length && !result?.message_id?.startsWith('om_')) throw new Error('Feishu image message did not return a message_id; delivery is unconfirmed')
+  }
   catch (error) {
     if (gone(error)) return 'gone'
     throw error

@@ -7,8 +7,12 @@ import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
+import { MessageImagesSchema, messageImages } from '../message-images.ts'
+import type { Commands } from '../../infra/commands.ts'
+import { uploadFeishuImage } from '../../sources/feishu-upload.ts'
 
 export interface ExecutorToolsHost {
+  readonly commands: Commands
   readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
   readonly store: Pick<Store, 'tickets' | 'replyStatus' | 'atomic'>
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
@@ -20,6 +24,18 @@ export interface ExecutorToolsHost {
 export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   const ticketId = ticket.id
   return [
+    tool({
+      name: 'orchestrator_image_upload',
+      description: 'Upload a requested image artifact from this ticket workspace using the configured Feishu bot. Does not send a message. Pass the returned image_key in orchestrator_report.images so the main session can deliver it via orchestrator_reply.images.',
+      schema: z.object({ path: z.string().min(1).describe('Path relative to this ticket workspace; PNG, JPEG, GIF or WebP, at most 10 MB.'), alt: z.string().max(200).optional() }).strict(),
+      execute: async (args, signal) => {
+        const current = host.store.tickets.get(ticketId)
+        if (!current || !liveTicket(current) || !current.execution?.directory) throw new Error('No active ticket workspace')
+        if (!current.channels.some(channel => channel.source === 'feishu')) throw new Error('This ticket has no Feishu delivery destination')
+        const image = await uploadFeishuImage(host.commands.withSignal(signal), current.execution.directory, args.path)
+        return { image_key: image, ...(args.alt ? { alt: args.alt } : {}), uploaded: true, sent: false }
+      },
+    }),
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',
       true, (resource, offset, limit, signal) => readResource(host.resources, resource, offset, limit, ticketId, signal)),
     tool({
@@ -70,10 +86,11 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
     }),
     tool({
       name: 'orchestrator_report',
-      description: 'Report progress, ready, blocked, failed or dropped, as the work and handoff sections say.',
+      description: 'Report progress, ready, blocked, failed or dropped, as the work and handoff sections say. Include uploaded screenshot/image references in images; they are forwarded to the main Session for delivery.',
       schema: z.object({
         state: z.enum(['progress', 'ready', 'blocked', 'failed', 'dropped']),
         summary: z.string().min(1),
+        images: MessageImagesSchema.optional(),
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
         reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
@@ -84,6 +101,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         // Record the report and its relay atomically so no report is lost between the worker and main session.
         return host.store.atomic(() => {
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
+            ...(args.images ? { images: messageImages(args.images) } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
             ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
           const updated = host.engine.report(ticketId, report)

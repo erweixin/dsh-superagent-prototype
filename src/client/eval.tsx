@@ -1,5 +1,6 @@
 /** Eval status view (Decision log) and Eval settings group (Policy rules, per-Source admission, and assessor settings). */
 import { useState } from 'react'
+import { AllowedPeople } from './allowed-people.tsx'
 import { ADMISSION_DEFAULTS, ADMISSION_OPTIONS, type Admission, type AdmissionCell } from '../admission.ts'
 import type { AdmissionRowView } from '../sources/kind.ts'
 import { LIMITS } from '../limits.ts'
@@ -78,7 +79,11 @@ function SourcePart({ source, part, saved, dirty, onChange, reload }: {
   // Syncing saves the Policy block, so require unsaved edits to be saved or discarded first.
   const syncNow = () => { if (dirty) notify(t('syncNeedsSave')); else void run.run() }
   return <div className="dt-part">
-    {policy.fields.map(field => <SourceField key={field.key} field={field} value={part[field.key]} saved={saved[field.key]} fact={undefined}
+    {policy.fields.map(field => field.key === 'allowed' && policy.people ? <AllowedPeople key={field.key}
+      sourceId={source.id} label={localized(t, field.label)} value={(part.allowed ?? []) as { id: string; name?: string }[]}
+      labels={source.labels} syncChat={String(part.syncChat ?? '')}
+      refreshChats={async () => { await call('POST sources/:id/labels', { id: source.id }); await reload() }}
+      onChange={allowed => onChange({ ...part, allowed })} /> : <SourceField key={field.key} field={field} value={part[field.key]} saved={saved[field.key]} fact={undefined}
       labels={source.labels}
       onChange={next => onChange({ ...part, [field.key]: next })} />)}
     {sync && <div className="dt-row-buttons">

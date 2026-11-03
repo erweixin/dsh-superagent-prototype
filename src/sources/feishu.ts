@@ -5,7 +5,7 @@ import { feishuLink, sendFeishu } from './feishu-channel.ts'
 import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
 import { SOURCE, feishuTriggerId } from './feishu-trigger.ts'
-import { sourceContext } from './host.ts'
+import { sourceContext, type SourceHost } from './host.ts'
 import type { Localized, SourceKind } from './kind.ts'
 import type { SourceRegistry } from './registry.ts'
 
@@ -14,9 +14,18 @@ export { SOURCE, feishuRef, feishuThreadId, feishuTime, feishuTrigger, feishuTri
 export type { FeishuEvent } from './feishu-trigger.ts'
 export { backfillChat, consumerRetry, pollThreads, refreshChatNames, threadRef } from './feishu-loops.ts'
 const MembersSchema = z.looseObject({
-  users: z.array(z.looseObject({ member_id: z.string(), name: z.string() })),
+  users: z.array(z.looseObject({ member_id: z.string().regex(/^ou_[a-zA-Z0-9]+$/), name: z.string().trim().max(100) })),
   has_more: z.boolean(), truncations: z.array(z.unknown()).optional(),
 })
+async function chatMembers(host: SourceHost, chatId: string, signal: AbortSignal) {
+  const chat = z.string().regex(/^oc_[a-zA-Z0-9]+$/).parse(chatId)
+  const commands = sourceContext(host, feishuKind).commands.withSignal(signal)
+  const result = MembersSchema.parse(await commands.lark([
+    'im', '+chat-members-list', '--chat-id', chat, '--member-types', 'user', '--page-all', '--page-limit', '0'
+  ]))
+  if (result.has_more || result.truncations?.length) throw new Error('Feishu returned an incomplete member list')
+  return [...new Map(result.users.map(user => [user.member_id, { id: user.member_id, name: user.name }])).values()]
+}
 const FeishuConfigSchema = FeishuBotSchema.extend({
   readPageSize: z.number().int().min(1).max(50).default(20),
   linkTimeoutMs: z.number().int().min(1).max(90000).default(5000),
@@ -73,6 +82,7 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   // A message's Trigger is named after the message, so the one it answers is named after its parent.
   repliesTo: trigger => typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined,
   policy: {
+    people: chatMembers,
     unnamed: { person: { zh: '飞书用户', en: 'Feishu user' }, bot: { zh: '飞书机器人', en: 'Feishu bot' } },
     schema: z.object({
       allowed: z.array(z.object({ id: z.string().regex(/^ou_[a-zA-Z0-9]+$/), name: z.string().trim().max(100).optional() }).strict())
@@ -108,15 +118,11 @@ export const feishuKind: SourceKind<FeishuConfig> = {
       label: { zh: '立即同步', en: 'Sync now' },
       ready: part => !!part.syncChat,
       async run(host, part, signal) {
-        const commands = sourceContext(host, feishuKind).commands.withSignal(signal)
-        const chat = String(part.syncChat)
-        const members = ['im', '+chat-members-list', '--chat-id', chat, '--member-types', 'user', '--page-all', '--page-limit', '0']
-        const result = MembersSchema.parse(await commands.lark(members))
-        if (result.has_more || result.truncations?.length) throw new Error('Feishu returned an incomplete member list')
+        const members = await chatMembers(host, String(part.syncChat), signal)
         // Preserve existing member order so policy version hashes stay stable; update names in place and append new members.
-        const users = new Map(result.users.map(user => [user.member_id, user.name]))
+        const users = new Map(members.map(user => [user.id, user.name]))
         const known = new Set(part.allowed.map(entry => entry.id))
-        return { ...part, allowed: [...part.allowed.filter(entry => users.has(entry.id)).map(entry => ({ ...entry, name: users.get(entry.id)! })), ...result.users.filter(user => !known.has(user.member_id)).map(user => ({ id: user.member_id, name: user.name }))] }
+        return { ...part, allowed: [...part.allowed.filter(entry => users.has(entry.id)).map(entry => ({ ...entry, name: users.get(entry.id)! })), ...members.filter(user => !known.has(user.id))] }
       },
     },
   },

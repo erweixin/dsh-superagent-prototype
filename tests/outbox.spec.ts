@@ -29,6 +29,25 @@ it('holds every message while processing is paused, and sends it once processing
   expect(JSON.stringify(lark.mock.calls)).toContain('已合并。')
 })
 
+it('persists image references across retry and preserves them if a sent receipt was withdrawn in flight', async () => {
+  const message: OutboundMessage = { id: 'image-retry', channel: { source: 'feishu', thread: 'topic', address: { messageId: 'om_original' } },
+    text: 'Screenshot', kind: 'reply', images: [{ imageKey: 'img_test' }] }
+  vi.spyOn(h.runtime.sources, 'channelAllowed').mockReturnValue(true)
+  const send = vi.spyOn(h.runtime.sources, 'send').mockRejectedValueOnce(new Error('temporary error')).mockResolvedValue('sent')
+  h.runtime.outbox.send(message)
+  await h.runtime.sendReplies()
+  expect(h.runtime.store.receipts.get(message.id)).toMatchObject({ status: 'pending', images: message.images })
+  await at(5000)
+  expect(h.runtime.store.receipts.get(message.id)).toMatchObject({ status: 'sent', images: message.images })
+  expect(send.mock.calls[0]![0]).toMatchObject({ id: message.id, images: message.images })
+  expect(send.mock.calls[1]![0]).toMatchObject({ id: message.id, images: message.images })
+  const racing = { ...message, id: 'image-racing' }
+  h.runtime.store.receipts.add(racing)
+  h.runtime.store.receipts.withdraw(racing.id)
+  h.runtime.store.receipts.settle(racing, 'sent')
+  expect(h.runtime.store.receipts.get(racing.id)).toMatchObject({ status: 'sent', images: message.images })
+})
+
 it('keeps a message for a Source that is not installed waiting, and sends it once the Source\'s kind registers', async () => {
   const sent: OutboundMessage[] = []
   const probe: SourceKind<Record<string, never>> = { kind: 'probe', title: { zh: '探针', en: 'Probe' }, description: { zh: '', en: '' }, health: [],

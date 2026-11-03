@@ -276,6 +276,31 @@ describe('feishu source', () => {
     expect(consumerRetry(32_000, 500)).toBe(60_000)
     expect(consumerRetry(60_000, 120_000)).toBe(1000)
   })
+  it('reads selectable people without changing policy and rejects invalid or incomplete member lists', async () => {
+    const h = host()
+    const before = h.store.settings()
+    const revision = h.store.blockRevision('policy')
+    vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
+    const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ users: [
+      { member_id: 'ou_carol', name: 'Carol' }, { member_id: 'ou_carol', name: 'Carol' }, { member_id: MEMBER, name: 'Alice' }
+    ], has_more: false })
+    const read = feishuKind.policy!.people!
+    const signal = new AbortController().signal
+    try {
+      expect(await read(h, 'oc_team', signal)).toEqual([{ id: 'ou_carol', name: 'Carol' }, { id: MEMBER, name: 'Alice' }])
+      expect(lark).toHaveBeenCalledWith(['im', '+chat-members-list', '--chat-id', 'oc_team', '--member-types', 'user', '--page-all', '--page-limit', '0'])
+      await expect(read(h, '--invalid', signal)).rejects.toThrow()
+      expect(lark).toHaveBeenCalledTimes(1)
+      lark.mockResolvedValue({ users: [], has_more: true })
+      await expect(read(h, 'oc_team', signal)).rejects.toThrow('incomplete member list')
+      lark.mockResolvedValue({ users: [], has_more: false, truncations: [{}] })
+      await expect(read(h, 'oc_team', signal)).rejects.toThrow('incomplete member list')
+      lark.mockResolvedValue({ users: [{ member_id: 'cli_bot', name: 'Bot' }], has_more: false })
+      await expect(read(h, 'oc_team', signal)).rejects.toThrow()
+      expect(h.store.settings()).toEqual(before)
+      expect(h.store.blockRevision('policy')).toBe(revision)
+    } finally { h.store.close() }
+  })
   it('syncs its part of the Policy from the sync chat: people who left are removed, names follow the chat, new people are appended', async () => {
     const h = host()
     // The sync reads the chat under its signal, so stopping the sync stops the read.

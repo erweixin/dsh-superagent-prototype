@@ -25,6 +25,7 @@ export interface Api {
   'GET sources': { response: SourceStatusView[] }
   'GET settings': { response: SettingsView }
   'POST sources/:id/labels': { response: { added: string[] } }
+  'GET sources/:id/people': { query: { scope: string }; response: { people: { id: string; name: string }[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }
   'GET threads/:key': { query?: { limit?: number; before?: string; around?: string }; response: ThreadDetailView }
   'POST threads/:key/unsubscribe': { response: { removed: boolean; thread: string; context_delivery: Delivery } }

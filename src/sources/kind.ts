@@ -36,6 +36,8 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
   unnamed?: { person: Localized; bot: Localized }
   /** Receiving scopes of the Policy's admission table under `config` (matching `scope().row`); kinds without `rows` use the table's defaults. */
   rows?(config: Record<string, unknown>): AdmissionRowView[]
+  /** Read-only candidates for a manual allowed-user selection; never saves or synchronizes the policy. */
+  people?(host: SourceHost, scope: string, signal: AbortSignal): Promise<{ id: string; name: string }[]>
   /** Optional external roster sync (such as chat members); `ready` reports whether `part` names a target to refresh from. */
   sync?: { label: Localized; ready(part: P): boolean; run(host: SourceHost, part: P, signal: AbortSignal): Promise<P> }
 }

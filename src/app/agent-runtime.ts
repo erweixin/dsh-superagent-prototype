@@ -30,6 +30,8 @@ export interface AgentSession {
   deliveries: Record<string, 'sending' | 'sent'>
   consumed?: string[]
   error?: string
+  toolSchemaFingerprint?: string
+  previousThreadIds?: string[]
 }
 export interface Approval {
   id: string
@@ -37,6 +39,7 @@ export interface Approval {
   turnId: string
   method: string
   detail: unknown
+  elicitation?: { message: string; serverName: string; canAccept: boolean; session: boolean }
   state: 'pending' | 'accepted' | 'declined' | 'expired'
   at: string
 }

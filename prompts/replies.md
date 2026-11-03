@@ -7,6 +7,7 @@ Ordinary progress reports only update internal ticket records and never wake the
 Do not relabel progress as an answer, manufacture a question or use CLI to bypass a rejected reply.
 Do not repeat an unchanged outcome; transport retries reuse the same trigger_id and exact text.
 A queued reply does not prove delivery.
+Feishu supports image delivery to groups and threads. For requested screenshots/images, workers call orchestrator_image_upload with a workspace-relative image path and copy its returned image_key into orchestrator_report.images. The main Session copies the report's images into orchestrator_reply.images, together with a short text. Do not drop images from a requested deliverable or claim the reply tool is text-only. Images travel as structured references, not base64 or local file links. Upload success does not mean message delivery; only a sent Outbox receipt confirms sending. Upload and send use the same configured bot. Never fabricate image keys or use another identity's keys.
 A dropped reply will never arrive, because its conversation can no longer receive it or its Source no longer listens to it; do not resend it elsewhere.
 
 Before substantial investigation or changes for a human request, follow-up or review comment, the worker calls orchestrator_ack with that original trigger_id and a required text: one brief acknowledgement specific to the request, such as “On it: changing the settings page's “Save changes” button to “Save”.”

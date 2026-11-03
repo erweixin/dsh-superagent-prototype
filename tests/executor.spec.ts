@@ -193,5 +193,10 @@ describe("the Executor's parts", () => {
       answer_to: 'tr9',
       summary: 'Done'
     })
+    const illustrated = { ...ticket, attention: undefined, assignments: [{ report: { state: 'ready', summary: 'Done', at: ticket.updatedAt,
+      images: [{ imageKey: 'img_screenshot', alt: '登录页' }] } }] } as unknown as Ticket
+    const withImage = reportRelay(illustrated, { state: 'ready', summary: 'Done' })!
+    expect(JSON.parse(withImage.text).images).toEqual([{ image_key: 'img_screenshot', alt: '登录页' }])
+    expect(withImage.id).not.toBe(ready.id)
   })
 })

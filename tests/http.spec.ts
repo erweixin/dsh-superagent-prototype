@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { panelTrigger } from '../src/sources/panel.ts'
 import { workerSessionId } from '../src/app/worker-sessions.ts'
 import { startApplication } from '../src/index.ts'
+import { Commands } from '../src/infra/commands.ts'
 let app: Awaited<ReturnType<typeof startApplication>> | undefined, root: string | undefined
 afterEach(async () => {
   await app?.stop()
@@ -26,6 +27,16 @@ it('serves a standalone panel, enforces same origin, and records local requests 
   expect((await fetch(base)).status).toBe(200)
   expect((await fetch(`${base}/orchestrator/api/state`)).status).toBe(403)
   const headers = { 'x-orchestrator-request': '1', 'content-type': 'application/json' }
+  const policyBefore = app.runtime.store.settings().policy
+  const people = vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: [{ member_id: 'ou_alice', name: 'Alice' }], has_more: false })
+  try {
+    const roster = await fetch(`${base}/orchestrator/api/sources/feishu/people?scope=oc_team`, { headers })
+    expect(roster.status).toBe(200)
+    expect(await roster.json()).toEqual({ people: [{ id: 'ou_alice', name: 'Alice' }] })
+    expect((await fetch(`${base}/orchestrator/api/sources/feishu/people?scope=invalid`, { headers })).status).toBe(400)
+    expect((await fetch(`${base}/orchestrator/api/sources/feishu/people?scope=oc_team`)).status).toBe(403)
+    expect(app.runtime.store.settings().policy).toEqual(policyBefore)
+  } finally { people.mockRestore() }
   const botRequest = { action: 'check', cli: resolve('tests/fixtures/lark-setup.mjs'), appId: 'cli_fixture',
     appSecret: 'fixture-secret', brand: 'feishu' }
   const unauthorizedBot = await fetch(`${base}/orchestrator/api/setup/feishu`, {
@@ -79,6 +90,13 @@ it('serves a standalone panel, enforces same origin, and records local requests 
   })
   expect(supplemental.status).toBe(200)
   expect(app.runtime.store.tickets.get(ticketId)!.inputs.some((i) => i.kind === 'trigger')).toBe(true)
+  const secondSupplemental = await fetch(`${base}/orchestrator/api/session/message`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ sessionId: `worker-${ticketId}`, text: 'Continue with the browser screenshot' })
+  })
+  expect(secondSupplemental.status).toBe(200)
+  const secondTrigger = app.runtime.store.read.triggers({}, 0, 100).items.find(t => t.text === 'Continue with the browser screenshot')!
+  expect(app.runtime.store.tickets.get(ticketId)!.inputs.filter(i => i.kind === 'trigger' && i.triggerId === secondTrigger.id)).toHaveLength(1)
   app.runtime.engine.stopTicket(ticketId)
   const stopped = await fetch(`${base}/orchestrator/api/session/message`, {
     method: 'POST',

@@ -1,6 +1,6 @@
 # Standalone setup
 
-1. Install Node.js 22.19 or newer and Codex CLI 0.153.4. Run `codex login`, then `codex login status` under the account that will run the service.
+1. Install Node.js 22.19 or newer and Codex CLI 0.166.0 (0.153.4 is also supported). Run `codex --version`, `codex login`, then `codex login status` under the account that will run the service. If multiple CLI installations exist, set `codexPath` to the absolute path of the supported executable. Other versions are rejected until their app-server compatibility is verified.
 2. Install dependencies and build with `npm install` and `npm run build`.
 3. Choose a new absolute state directory and optionally write `superagent.config.json` as shown in README. Do not point the application at an old DSH state directory.
 4. Install the official `lark-cli` on the service computer: `npx @larksuite/cli@latest install`. Create a Feishu internal app with bot capability (details below).
@@ -18,6 +18,8 @@ For a Linux user service, adapt `examples/feishu-superagent.service` with absolu
 `npm run smoke:codex` runs the real local Codex account through a complete panel-source task: accept, create an isolated directory, write and verify one test file, report ready, and deliver acknowledgement/result through the local Outbox. It prints the temporary state directory for inspection and does not contact Feishu. This is separate from `npm run check`, which uses simulated provider processes.
 
 ## 在 Web 面板配置飞书机器人
+
+在 **设置 → 评估 → 能发起工作的飞书用户** 中点击“选择用户”，选择机器人已加入的群，按姓名或 open_id 搜索并勾选成员，然后添加并保存。可以跨群选择，姓名和 ID 自动填入；群列表为空时点击“刷新群列表”。查询群成员不会自动授权任何人。列表未覆盖的用户可通过“手动输入 open_id”添加。若设置了“同步来源群”，下次同步仍会用该群的全部成员替换名单；要保留手动选择，请设为“不同步”。
 
 这里使用的是企业自建应用的机器人，需要 **App ID 和 App Secret**；群聊“自定义机器人”的 webhook 地址不能用于本项目。
 

@@ -47,6 +47,7 @@ export function inputLine(ticket: Ticket, input: TicketInput, worker = false) {
 export function assignmentLine(ticket: Ticket, item: Ticket['assignments'][number]) {
   return { id: item.id, state: item.state, at: item.createdAt, ...(item.endedReason ? { ended_reason: reasonText({ code: item.endedReason }) } : {}),
     ...(item.report ? { report: { state: item.report.state, at: item.report.at, preview: preview(item.report.summary).slice(0, 100),
+      ...(item.report.images?.length ? { images: item.report.images.map(image => ({ image_key: image.imageKey, ...(image.alt ? { alt: image.alt } : {}) })) } : {}),
       chars: item.report.summary.length, read: `ticket/${ticket.id}/report/${item.id}` } } : {}) }
 }
 export function newestPage<T, L>(items: readonly T[], offset: number, size: number, line: (item: T) => L, next: string) {

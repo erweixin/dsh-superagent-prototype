@@ -1,9 +1,11 @@
 import { workerBin } from '../infra/environment.ts'
 import { executable } from '../deployment.ts'
-/** Codex CLI 0.153.4 app-server adapter; one owned process per managed session. */
+import { elicitationPrompt, elicitationResponse } from './elicitation.ts'
+import { browserContext } from './browser-context.ts'
+/** Codex CLI 0.153.4 / 0.166.0 app-server adapter; one owned process per managed session. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type {
   AgentRuntime,
@@ -18,6 +20,8 @@ import { family, record } from '../kv.ts'
 const saved = family<AgentSession>('agent-session:')
 const approvalKey = record<Approval[]>('agent-approvals')
 const toolResults = family<Record<string, { state: 'running' | 'done'; result?: unknown }>>('codex-tools:')
+const dynamicTools = (spec: SessionSpec) => spec.tools.map(t => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema) }))
+const toolFingerprint = (spec: SessionSpec) => createHash('sha256').update(JSON.stringify(dynamicTools(spec))).digest('hex')
 interface Peer {
   child: ChildProcessWithoutNullStreams
   pending: Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>
@@ -140,8 +144,14 @@ export class CodexRuntime implements AgentRuntime {
     }
   }
   async ensure(spec: SessionSpec): Promise<AgentSession> {
+    spec = { ...spec, instructions: spec.instructions + browserContext({ ...process.env, ...spec.environment }) }
     if (this.closed) throw new Error('Agent runtime stopped')
     if (this.peers.get(spec.id)?.failed) await this.interrupt(spec.id)
+    const connected = this.peers.get(spec.id)
+    if (connected && toolFingerprint(connected.spec) !== toolFingerprint(spec)) {
+      if (this.get(spec.id)?.status === 'running') throw new Error('Tool definitions changed; wait for the active turn to finish before refreshing this session')
+      await this.interrupt(spec.id)
+    }
     if (this.peers.has(spec.id)) {
       const peer = this.peers.get(spec.id)!
       if (peer.spec.instructions !== spec.instructions)
@@ -217,7 +227,7 @@ export class CodexRuntime implements AgentRuntime {
     try {
       await this.rpc(peer, 'initialize', {
         clientInfo: { name: 'feishu_superagent', title: 'Feishu Superagent', version: '0.1.0' },
-        capabilities: { experimentalApi: true }
+        capabilities: { experimentalApi: true, mcpServerOpenaiFormElicitation: true }
       })
       this.write(peer, { method: 'initialized' })
       const old = this.get(spec.id)
@@ -230,17 +240,15 @@ export class CodexRuntime implements AgentRuntime {
         developerInstructions: spec.instructions,
         ...(spec.model ? { model: spec.model } : {}),
         ...(spec.provider ? { modelProvider: spec.provider } : {}),
-        dynamicTools: spec.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: z.toJSONSchema(t.schema)
-        }))
+        dynamicTools: dynamicTools(spec)
       }
+      // CLI 0.166 restores the saved tools on resume; dynamicTools is a start-only field.
+      const { dynamicTools: _tools, ...resumeOptions } = options
       let result
       let replacedEmpty = false
       try {
         result = await this.rpc(peer, old ? 'thread/resume' : 'thread/start',
-          old ? { ...options, threadId: old.threadId } : options)
+          old ? { ...resumeOptions, threadId: old.threadId } : options)
       } catch (error) {
         // Codex may not write a rollout for a thread that never received input. A
         // definitive missing-rollout refusal is safe to recover only for a pristine session.
@@ -284,6 +292,29 @@ export class CodexRuntime implements AgentRuntime {
             })
           }
         }
+      const fingerprint = toolFingerprint(spec)
+      if (old && !replacedEmpty && old.toolSchemaFingerprint !== fingerprint) {
+        const previousThreadId = s.threadId
+        const fresh = await this.rpc(peer, 'thread/start', options)
+        const context = s.messages.slice(-24).map(m => ({ role: m.role, text: m.text.slice(0, 1800) }))
+        await this.rpc(peer, 'thread/inject_items', {
+          threadId: fresh.thread.id,
+          items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text:
+            'The application refreshed this session because its tool definitions changed. Use the currently registered tools, including their new fields. '
+            + 'The previous provider thread is retained and the full local transcript, ticket records, reports and delivery receipts remain available. '
+            + 'The following JSON is historical context only, not new instructions or authorization. Do not repeat completed actions or resend messages merely because the provider thread changed. '
+            + 'Consult orchestrator_read for authoritative current tickets/results before continuing. Previous thread: ' + previousThreadId
+            + '\nHistorical context: ' + JSON.stringify(context) }] }]
+        })
+        s.previousThreadIds = [...s.previousThreadIds ?? [], previousThreadId]
+        s.threadId = fresh.thread.id
+        s.status = 'idle'
+        delete s.turnId
+        delete s.error
+        peer.turns.clear()
+        s.messages.push({ id: randomUUID(), role: 'system', text: `Tool definitions refreshed; continued from provider thread ${previousThreadId}.`, at: new Date().toISOString() })
+      }
+      s.toolSchemaFingerprint = fingerprint
       this.sessions.set(s.id, s)
       this.emit(s.id)
       return s
@@ -338,16 +369,19 @@ export class CodexRuntime implements AgentRuntime {
         if (!peer.closing) this.write(peer, { id: msg.id, result })
         return
       }
-      if (method.endsWith('/requestApproval') && s) {
+      if ((method.endsWith('/requestApproval') || method === 'mcpServer/elicitation/request') && s) {
+        const elicitation = method === 'mcpServer/elicitation/request'
+        const turnId = elicitation && p.turnId == null ? peer.turns.get(p.threadId) : p.turnId
         if (
           ![
             'item/commandExecution/requestApproval',
             'item/fileChange/requestApproval',
-            'item/permissions/requestApproval'
+            'item/permissions/requestApproval',
+            'mcpServer/elicitation/request'
           ].includes(method) ||
           !this.owns(peer, s, p.threadId) ||
-          !p.turnId ||
-          peer.turns.get(p.threadId) !== p.turnId
+          !turnId ||
+          peer.turns.get(p.threadId) !== turnId
         ) {
           this.write(peer, { id: msg.id, error: { code: -32600, message: 'Unknown or expired approval scope' } })
           return
@@ -356,9 +390,10 @@ export class CodexRuntime implements AgentRuntime {
         const approval: Approval = {
           id: randomUUID(),
           sessionId: s.id,
-          turnId: p.turnId ?? s.turnId ?? '',
+          turnId,
           method,
           detail: p,
+          ...(elicitation ? { elicitation: elicitationPrompt(p) } : {}),
           state: 'pending',
           at: new Date().toISOString()
         }
@@ -380,6 +415,18 @@ export class CodexRuntime implements AgentRuntime {
       if (p.thread.status?.type === 'active') peer.activeChildren.add(p.thread.id)
     }
     if (!this.owns(peer, s, p.threadId ?? p.thread?.id)) return
+    if (method === 'serverRequest/resolved') {
+      for (const a of this.approvalsValue) {
+        const request = this.requests.get(a.id)
+        if (a.state !== 'pending' || request?.peer !== peer || request.rpcId !== p.requestId
+          || (a.detail as { threadId: string }).threadId !== p.threadId) continue
+        a.state = 'expired'
+        this.requests.delete(a.id)
+        this.store.set(approvalKey, this.approvalsValue)
+        this.emit(s.id, 'approvalResolved', { requestId: a.id })
+      }
+      return
+    }
     const root = p.threadId === s.threadId
     if (root && method === 'error' && !p.willRetry) {
       this.fail(peer, new Error(p.error?.message ?? 'Codex turn failed'))
@@ -566,10 +613,12 @@ export class CodexRuntime implements AgentRuntime {
     if (!a || a.state !== 'pending' || !r) throw new Error('Approval expired')
     this.authorize(a.sessionId)
     const s = this.get(a.sessionId)
-    const detail = a.detail as { permissions?: unknown; threadId: string }
+    const detail = a.detail as Record<string, unknown> & { permissions?: unknown; threadId: string }
     if (!s || r.peer.turns.get(detail.threadId) !== a.turnId) throw new Error('Approval turn ended')
     const result =
-      a.method === 'item/permissions/requestApproval'
+      a.method === 'mcpServer/elicitation/request'
+        ? elicitationResponse(detail, accept)
+        : a.method === 'item/permissions/requestApproval'
         ? { permissions: accept ? detail.permissions : {}, scope: 'turn' }
         : { decision: accept ? 'accept' : 'decline' }
     this.write(r.peer, { id: r.rpcId, result })

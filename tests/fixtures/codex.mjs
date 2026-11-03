@@ -3,7 +3,7 @@ import readline from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 if (process.argv.includes('--version')) {
-  console.log('codex-cli 0.153.4')
+  console.log(process.env.TEST_CODEX_VERSION_OUTPUT ?? 'codex-cli 0.166.0')
   process.exit(0)
 }
 if (process.argv[2] === 'login') {
@@ -13,9 +13,15 @@ if (process.argv[2] === 'login') {
 const send = (v) => process.stdout.write(JSON.stringify(v) + '\n')
 let thread = `test-${randomUUID()}`,
   turn = 0
+let registeredTools = []
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const m = JSON.parse(line)
   if (!m.method) {
+    if (m.id === 102) {
+      writeFileSync('elicitation-response.json', JSON.stringify(m))
+      send({ method: 'serverRequest/resolved', params: { threadId: thread, requestId: m.id } })
+      send({ method: 'turn/completed', params: { threadId: thread, turn: { id: `turn-${turn}`, status: 'completed' } } })
+    }
     if (m.id === 100 && m.result) {
       const accepted = m.result.decision === 'accept'
       if (accepted) writeFileSync('approved-command-ran', 'yes')
@@ -32,13 +38,27 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   const p = m.params ?? {}
   let result = {}
-  if (m.method === 'initialize') result = { userAgent: 'codex-test' }
+  if (m.method === 'initialize') {
+    if (!p.capabilities?.mcpServerOpenaiFormElicitation) throw new Error('Missing MCP form capability')
+    result = { userAgent: 'codex-test' }
+  }
   if (m.method === 'thread/resume' && process.env.TEST_MISSING_ROLLOUT === '1') {
     send({id:m.id,error:{code:-32600,message:`no rollout found for thread id ${p.threadId}`}})
     return
   }
   if (m.method === 'thread/start' || m.method === 'thread/resume') {
-    thread = p.threadId ?? thread
+    if (m.method === 'thread/resume' && p.dynamicTools) {
+      send({ id: m.id, error: { code: -32600, message: 'dynamicTools is not supported by thread/resume' } })
+      return
+    }
+    thread = p.threadId ?? `test-${randomUUID()}`
+    let savedTools = {}
+    try { savedTools = JSON.parse(readFileSync('fake-thread-tools.json', 'utf8')) } catch {}
+    if (m.method === 'thread/start') {
+      savedTools[thread] = p.dynamicTools ?? []
+      writeFileSync('fake-thread-tools.json', JSON.stringify(savedTools))
+    }
+    registeredTools = savedTools[thread] ?? []
     let turns = []
     try {
       turns = JSON.parse(readFileSync('fake-history.json', 'utf8'))
@@ -47,6 +67,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (m.method === 'model/list')
     result = { data: [{ model: 'test-model', displayName: 'Test', supportedReasoningEfforts: [] }], nextCursor: null }
+  if (m.method === 'thread/inject_items') {
+    if (process.env.TEST_FAIL_TOOL_REFRESH === '1') {
+      send({ id: m.id, error: { code: -32600, message: 'Context injection failed' } })
+      return
+    }
+    writeFileSync('fake-injected-context.json', JSON.stringify(p))
+  }
   if (m.method === 'turn/start') {
     if (
       p.sandboxPolicy?.type === 'workspaceWrite' &&
@@ -77,7 +104,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       process.exit(1)
     }
     if (text.includes('CRASH_ON_SEND')) process.exit(1)
-    if (text.includes('ACTIVITIES')) {
+    if (text.includes('CHECK_IMAGE_TOOLS')) {
+      const tool = registeredTools.find(t => t.name === 'orchestrator_reply')
+      if (tool?.inputSchema?.properties?.images) setTimeout(() => send({ id: 101, method: 'item/tool/call', params: {
+        threadId: thread, turnId: id, callId: 'image-probe', tool: 'orchestrator_reply', arguments: { text: 'image probe', images: [{ image_key: 'img_probe' }] }
+      } }), 10)
+      else send({ method: 'item/agentMessage/delta', params: { threadId: thread, itemId: 'stale-tools', delta: 'No images field in registered tool' } })
+    } else if (text.includes('ACTIVITIES')) {
       send({
         method: 'thread/started',
         params: { thread: { id: 'child', parentThreadId: thread, status: { type: 'active' } } }
@@ -140,6 +173,17 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       }
       setTimeout(() => send({ ...call, id: 201 }), 10)
       setTimeout(() => send({ ...call, id: 202 }), 80)
+    } else if (text.includes('ELICITATION')) {
+      setTimeout(() => send({ id: 102, method: 'mcpServer/elicitation/request', params: {
+        threadId: text.includes('FOREIGN') ? 'other-thread' : thread,
+        ...(text.includes('NO_TURN') ? {} : { turnId: text.includes('STALE') ? 'old-turn' : id }),
+        serverName: 'cua_repl', mode: text.includes('VERIFY') ? 'openai/userVerification' : 'openai/form',
+        message: 'Allow Computer Use to use "Google Chrome"?',
+        requestedSchema: { type: 'object', properties: text.includes('FIELDS') ? { password: { type: 'string' } } : {} },
+        _meta: { connector_id: 'computer-use', persist: ['session', 'always'], tool_params: { app: 'com.google.Chrome' } }
+      } }), 10)
+      if (text.includes('RESOLVED')) setTimeout(() => send({ method: 'serverRequest/resolved', params: { threadId: thread, requestId: 102 } }), 100)
+      if (text.includes('END_TURN')) setTimeout(() => send({ method: 'turn/completed', params: { threadId: thread, turn: { id, status: 'completed' } } }), 100)
     } else if (text.includes('REQUEST_APPROVAL'))
       setTimeout(
         () =>

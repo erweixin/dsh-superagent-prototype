@@ -277,4 +277,11 @@ export class Settings {
     const after = await kind.refreshLabels(this.host.sourceHost)
     return { added: Object.entries(after).filter(([key]) => !(key in before)).map(([, name]) => name).sort((a, b) => a.localeCompare(b)) }
   }
+  /** Reads selectable people under the configured source account without changing the allowed list or its revision. */
+  async people(id: string, scope: string) {
+    const instance = this.host.sources.instance(id)
+    const read = instance && this.host.sources.kind(instance.kind)?.policy?.people
+    if (!read) throw new Error('This source does not support user selection')
+    return { people: await read(this.host.sourceHost, scope, this.host.lifetime) }
+  }
 }
