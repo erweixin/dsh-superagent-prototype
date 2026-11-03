@@ -25,12 +25,13 @@ import { eventNotice, followupNotice } from './notices.ts'
 import { CodexRuntime } from '../executor/codex-runtime.ts'
 import { mkdirSync as ensureDirectory } from 'node:fs'
 import { panelKind } from '../sources/panel.ts'
-import { runFeishu } from '../sources/feishu-loops.ts'
+import { SourceLoops } from '../sources/loops.ts'
+import { installedSourceKinds } from './source-plugins.ts'
+import type { SourceKind } from '../sources/kind.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
-import { feishuKind, feishuSettings } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
@@ -69,14 +70,14 @@ export class Runtime implements SourceHost {
   private readonly stopped = new AbortController()
   private readonly disposers: (() => void)[] = []
   private releaseLock?: () => Promise<void>
-  private sourceLoop?: Promise<unknown>
+  private readonly sourceLoops: SourceLoops
   private closingFlag = false
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(readonly machine: Machine, restart: () => void) {
+  constructor(readonly machine: Machine, restart: () => void, kinds: readonly SourceKind[] = installedSourceKinds) {
     const logger = console
     const runtime = this
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
@@ -88,22 +89,22 @@ export class Runtime implements SourceHost {
     try {
       const report = (error: unknown) => { logger.warn('feishu-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
-      const setup = this.setup = new Setup({ machine, lifetime: this.lifetime, restart })
+      const sources = this.sources = new SourceRegistry(() => store.settings(), this.board, kind => {
+        // Sync source member lists once startup completes when a source plugin loads dynamically.
+        if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
+          .catch(() => { /* sync() records its failure in health. */ })
+        return this.sourceLoops?.registered(kind) ?? (() => {})
+      })
+      const setup = this.setup = new Setup({ machine, lifetime: this.lifetime, restart }, sources)
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
-      const feishu = () => setup.configured() && !!setup.deployment.feishu
-      const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
+      const sourceSkills = () => setup.configured() ? sources.activeSkills(setup.deployment) : []
+      const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, sourceSkills)
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
       const board = this.board
       const effects = this.effects = new Effects(store, board)
-      const sources = this.sources = new SourceRegistry(() => store.settings(), board, kind => {
-        // Sync source member lists once startup completes when a source plugin loads dynamically.
-        if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
-          .catch(() => { /* sync() records its failure in health. */ })
-        return () => {}
-      })
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
@@ -115,7 +116,7 @@ export class Runtime implements SourceHost {
       }, machine.stateDir)
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, agentRuntime: agents,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
-        feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
+        sources, sourceLink: link }
       const sessions = this.sessions = new Sessions({ runtime: agents, store, prompts, effects, masterId,
         lifetime: this.lifetime,
         environment,
@@ -151,7 +152,7 @@ export class Runtime implements SourceHost {
         health: this.runtimeHealth, lifetime: this.lifetime, configured: () => setup.configured(), closing: () => this.closing() })
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
-        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
+        get setupProblem() { return setup.problem }, get sourceProblems() { return setup.sourceProblems }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { logger, engine, store, commands, prompts, sessions, settings: this.settings, assessor, resources,
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
@@ -167,7 +168,8 @@ export class Runtime implements SourceHost {
           passes.request()
         } else if (ticket.attention?.question === question) engine.report(ticket.id, {state:'progress',summary:'Local permission request resolved.',question:null})
       }))
-      sources.register(feishuKind)
+      this.sourceLoops = new SourceLoops(this, sources, this.lifetime, (kind, error) => logger.warn('%s source stopped: %s', kind, String(error)))
+      for (const kind of kinds) sources.register(kind)
       sources.register(panelKind(store))
       const initial = store.settings()
       if (!initial.policy.sources.panel) store.saveSettings({...initial, policy: {...initial.policy, sources: {...initial.policy.sources, panel: {allowed:[{id:'operator',name:'Local operator'}], admission:{}}}}})
@@ -186,11 +188,13 @@ export class Runtime implements SourceHost {
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }
   get setupProblem(): SetupProblem | undefined { return this.setup.problem }
-  /** Why the Feishu bot is unavailable even though the Feishu Source configures a CLI. */
+  /** Account failures keyed by source; independent from global deployment setup. */
+  get sourceProblems(): Readonly<Record<string, SetupProblem>> { return this.setup.sourceProblems }
+  /** Compatibility alias for older management clients. */
   get feishuProblem(): SetupProblem | undefined { return this.setup.feishuProblem }
   links(): LinkTarget {
     const resolved = this.setup.configured() ? this.setup.deployment : undefined
-    const links = resolved ? { ...(resolved.feishu ? { feishu: resolved.feishu } : {}) } : {}
+    const links = resolved ?? {}
     return channel => this.sources.link(channel, links)
   }
   ticketEnvironment(ticket: Ticket): Variable[] {
@@ -221,7 +225,7 @@ export class Runtime implements SourceHost {
     for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() records its failure in health. */ })
     // If stop() was called while awaiting setup, session creation, or policy sync, do not start background loops.
     if (this.closing()) return
-    this.sourceLoop = runFeishu(this.context(feishuKind), this.lifetime).catch(error => console.warn('Feishu stopped:', String(error)))
+    this.sourceLoops.start()
     this.executor.resume()
     this.passes.start()
     this.effects.start()
@@ -232,7 +236,7 @@ export class Runtime implements SourceHost {
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
       get deployment() { return setup.deployment },
-      get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
+      get setupProblem() { return setup.problem }, get sourceProblems() { return setup.sourceProblems }, get feishuProblem() { return setup.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
       checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.sessions.runtime.models() }
   }
@@ -244,7 +248,7 @@ export class Runtime implements SourceHost {
       await this.ready.catch(() => {})
       this.assessor.stop()
       await this.executor.shutdown()
-      await Promise.allSettled([passes, this.effects.drain(), this.sourceLoop])
+      await Promise.allSettled([passes, this.effects.drain(), this.sourceLoops.stop()])
       this.executor.dispose()
       for (const dispose of this.disposers.reverse()) dispose()
     } finally {

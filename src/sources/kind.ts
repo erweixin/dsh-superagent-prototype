@@ -1,4 +1,5 @@
 /** SourceKind plugin contract: configuration schema, UI form fields, policy integration, channel adapter, and thread context reader. */
+import type { SourceSetup, SourceRun } from './server.ts'
 import type { Agent } from '../app/agent-runtime.ts'
 import type { z } from 'zod'
 import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
@@ -6,24 +7,11 @@ import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
 
-export interface Localized { zh: string; en: string }
-/** `advanced` folds a rarely changed field (such as a polling tunable) behind the card's Advanced section. */
-interface FieldBase { key: string; label: Localized; hint?: Localized; advanced?: true }
-/**
- * Configuration field specification; `rows` edits a list of records keyed by its first column, `choose` picks from
- * resolved source labels, and `fact` displays a read-only value from `facts`.
- */
-export type FieldSpec =
-  | FieldBase & { type: 'switch' }
-  | FieldBase & { type: 'select'; options: { value: string; label: Localized }[] }
-  | FieldBase & { type: 'number'; min: number; max: number }
-  | FieldBase & { type: 'text'; pattern?: string; readonly?: boolean; choose?: Localized }
-  | FieldBase & { type: 'fact'; settings?: 'deployment' }
-  | FieldBase & { type: 'rows'; columns: ({ key: string; label: Localized; type: 'text'; pattern?: string; optional?: boolean; choose?: Localized; refresh?: Localized } | { key: string; label: Localized; type: 'select'; options: { value: string; label: Localized }[] })[] }
+import type { FieldSpec, Localized, AdmissionRowView, SourceConnection } from '../contracts/source-settings.ts'
+export type { FieldSpec, Localized, AdmissionRowView } from '../contracts/source-settings.ts'
 
 export interface VariableSpec { key: string; description: Localized }
 export interface EnvironmentInput<C> { deployment: Deployment; config: C; trigger?: Trigger }
-export interface AdmissionRowView { id: string; label: Localized | string; note: Localized; cells: { listedUnaddressed: boolean; unlistedAddressed: boolean; unlistedUnaddressed: boolean } }
 /** Policy extension for a source kind, defining allowed senders, admission table rows, and optional external roster sync. */
 export interface SourcePolicyPart<P extends Record<string, unknown>> {
   /** Validates the Source's part of the Policy, including `allowed` (senders who may originate work). */
@@ -43,7 +31,7 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
 }
 /** UI link for a channel address; `triggerId` names the Trigger whose own deep link is preferred when available. */
 export interface ChannelLink { url: string; label: Localized; triggerId?: string }
-export type ChannelLinks = Partial<Pick<Deployment, 'feishu'>>
+export type ChannelLinks = Partial<Deployment>
 /** Outbound messaging adapter for a source kind's threads. */
 export interface SourceChannel<C> {
   /** Whether a reply may still go to `address`; without it, every address may receive replies. */
@@ -83,10 +71,28 @@ export interface TriggerContext {
   image(agent: Agent, commands: Commands, message: { id: string; text: string }, key: string, stateDir: string,
     signal: AbortSignal): Promise<unknown>
 }
+export interface SourceResources<C> {
+  prefix: string
+  descriptor: { name: string; holds: string; executor?: true }
+  triggerId(resource: string): string
+  read(commands: Commands, trigger: Trigger, resource: string, config: C): Promise<unknown>
+  references(trigger: Trigger): Record<string, string> | undefined
+}
+export interface SourceMessageLink<C> {
+  key(trigger: Trigger): string | undefined
+  timeoutMs(config: C): number
+  read(commands: Commands, trigger: Trigger): Promise<string>
+  fallback(trigger: Trigger): string
+}
 /** Pluggable source kind descriptor registered with SourceRegistry. */
 export interface SourceKind<C extends Record<string, unknown> = Record<string, unknown>> {
   /** Stable ID; a default instance with the same ID exists when none is stored. */
   kind: string
+  setup?: SourceSetup<C>
+  run?: SourceRun
+  skills?: readonly string[]
+  resources?: SourceResources<C>
+  messageLink?: SourceMessageLink<C>
   title: Localized
   description: Localized
   /** Read-only status facts derived from `deployment` (undefined while waiting for setup), keyed by field key. */
@@ -94,6 +100,8 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   /** Validates stored and submitted configuration and fills defaults. */
   schema: z.ZodType<C>
   fields: FieldSpec[]
+  /** Public account facts only; credentials never enter management views. */
+  connection?(config: C, deployment: Deployment | undefined): SourceConnection
   /** Operator-selected workspaces, keyed by a source-local conversation scope. */
   workspaces?(config: C): { key: string; directory: string }[]
   workspaceKey?(trigger: Trigger): string | undefined

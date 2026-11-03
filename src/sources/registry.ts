@@ -40,6 +40,30 @@ export class SourceRegistry implements SourceScope {
   healthEntries(names: readonly string[]): Map<string, HealthEntry> {
     return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
   }
+  installed(): SourceKind[] { return [...this.kinds.values()] }
+  setupFields(): Record<string, readonly string[]> {
+    return Object.fromEntries(this.installed().flatMap(kind => kind.setup ? [[kind.kind, kind.setup.fields]] : []))
+  }
+  activeSkills(deployment: import('../deployment.ts').Deployment): string[] {
+    return this.installed().flatMap(kind => deployment.accounts?.[kind.kind] ? [...kind.skills ?? []] : [])
+  }
+  resource(resource: string) {
+    const kind = this.installed().find(kind => kind.resources && resource.startsWith(kind.resources.prefix))
+    if (!kind?.resources) return undefined
+    const extension = kind.resources
+    const config = this.instance(kind.kind)!.config
+    return { source: kind.kind, triggerId: extension.triggerId(resource),
+      read: (commands: Commands, trigger: Trigger) => extension.read(commands, trigger, resource, config) }
+  }
+  references(trigger: Trigger) { return this.kind(trigger.source)?.resources?.references(trigger) }
+  messageLink(trigger: Trigger) {
+    const kind = this.kind(trigger.source)
+    const extension = kind?.messageLink
+    if (!kind || !extension) return undefined
+    const key = extension.key(trigger)
+    return key ? { key, timeoutMs: extension.timeoutMs(this.instance(kind.kind)!.config), fallback: extension.fallback(trigger),
+      read: (commands: Commands) => extension.read(commands, trigger) } : undefined
+  }
   kind(id: string): SourceKind | undefined { return this.kinds.get(id) }
   /** Every registered kind's instance ordered by ID, followed by stored instances whose kind is not installed (with their config kept as stored). */
   instances(settings = this.settings()): (SourceInstance & { installed: boolean })[] {

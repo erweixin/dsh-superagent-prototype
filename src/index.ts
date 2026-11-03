@@ -6,7 +6,8 @@ import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { ticketOfSession } from './app/worker-sessions.ts'
 import { Runtime } from './app/runtime.ts'
-import { FeishuBotSetup } from './app/feishu-setup.ts'
+import { SourceOnboarding } from './sources/onboarding.ts'
+import { installedSourceKinds } from './app/source-plugins.ts'
 import { machineOf } from './deployment.ts'
 import { managementHandler, sameOrigin } from './app/http.ts'
 import { panelTrigger, panelReplies } from './sources/panel.ts'
@@ -43,7 +44,7 @@ export async function startApplication(configPath = resolve('superagent.config.j
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
   }
   const machine = machineOf({ stateDir: join(homedir(), '.feishu-superagent'), ...input })
-  const feishuSetup = new FeishuBotSetup()
+  const sourceOnboarding = new SourceOnboarding(installedSourceKinds)
   let runtime: Runtime
   let restarting: Promise<void> | undefined
   const restart = () => {
@@ -75,10 +76,11 @@ export async function startApplication(configPath = resolve('superagent.config.j
         }
         const path = url.pathname.slice('/orchestrator/api/'.length),
           agents = runtime.sessions.runtime
-        if (path === 'setup/feishu' && req.method === 'POST') {
+        const onboard = req.method === 'POST' ? sourceOnboarding.handler(path, runtime.sources) : undefined
+        if (onboard) {
           let input: unknown
           try { input = await body(req) } catch { throw new Error('Invalid bot setup request body') }
-          json(res, 200, await feishuSetup.configure(runtime, input))
+          json(res, 200, await onboard(runtime, input))
           return
         }
         if (path === 'sessions' && req.method === 'GET') {

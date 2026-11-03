@@ -1,7 +1,7 @@
 /** Source status view (health, filtered Triggers, dropped replies) and Source settings cards. */
-import { FeishuSetup } from './feishu-setup.tsx'
+import { useSourceClients } from './source-plugins.tsx'
 import { useEffect, useState } from 'react'
-import type { FieldSpec } from '../sources/kind.ts'
+import type { FieldSpec } from '../contracts/source-settings.ts'
 import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
 import { DisclosureRow, Dot, Icon, InfoTip, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
@@ -59,12 +59,26 @@ function SourceCard({ source }: { source: SourceView }) {
   </form>
 }
 
+function SourceConnectionPanel({ source }: { source: SourceView }) {
+  const plugin = useSourceClients().get(source.kind)
+  const { t, call, notify, restart, navigate } = usePanel()
+  const { running } = usePanelData()
+  const { reload } = useSettings()
+  const ConnectionPanel = source.installed ? plugin?.ConnectionPanel : undefined
+  if (!ConnectionPanel) return null
+  const problem = source.connection?.problem
+  return <ConnectionPanel source={source} services={{ t, call, notify }} runningCount={running}
+    problem={problem ? <div role="status"><SetupMessage problem={problem} lead /><CheckSetupButton /></div> : null}
+    onChanged={reload} onRestartRequired={restart} onOpenPolicy={() => navigate(settingsRoute('eval', { source: source.id }))} />
+}
 export function SourceSettings({ focus }: { focus?: string }) {
   const { sources } = useSettings().settings
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
   return <div className="dt-form">
-    <FeishuSetup source={sources.find(source => source.id === 'feishu')} />
-    {sources.map(source => <SourceCard key={source.id} source={source} />)}
+    {sources.map(source => <div key={source.id} className="dt-form">
+      <SourceConnectionPanel source={source} />
+      <SourceCard source={source} />
+    </div>)}
     <ConfigHistory blocks={['source:']} />
   </div>
 }

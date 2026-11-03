@@ -120,7 +120,7 @@ export type StateView = ApiResponse<'GET state'>
 export type SetupView = StateView['setup']
 export type SettingsView = ApiResponse<'GET settings'>
 export type Settings = { [B in keyof SettingsView['blocks']]: SettingsView['blocks'][B]['value'] }
-export type SourceView = SettingsView['sources'][number]
+export type { SourceSettingsView as SourceView } from '../contracts/source-settings.ts'
 export type SourceStatusRow = ApiResponse<'GET sources'>[number]
 export type TicketRow = ApiResponse<'GET tickets'>['items'][number]
 export type TicketPageView = ApiResponse<'GET tickets/:id'>

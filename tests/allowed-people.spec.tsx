@@ -2,8 +2,9 @@
 import { act, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
-import { AllowedPeople } from '../src/client/allowed-people.tsx'
-import { PanelProvider } from '../src/client/provider.tsx'
+import { FeishuAllowedPeople } from '../src/integrations/feishu/client/people-picker.tsx'
+import { sourceView } from './fixtures/source-client.ts'
+import { PanelProvider, usePanel } from '../src/client/provider.tsx'
 import { zh } from '../src/client/locales.ts'
 import type { T } from '../src/client/text.ts'
 
@@ -27,9 +28,11 @@ async function mount(roster: (chat: string) => Promise<Response>, initial: Perso
   function Harness() {
     const [value, setValue] = useState(initial)
     selected = value
-    return <AllowedPeople sourceId="feishu" label="Allowed users" value={value}
-      labels={{ oc_a: 'A team', oc_b: 'B team' }} syncChat="" refreshChats={async () => {}}
-      onChange={next => { changed(next); setValue(next) }} />
+    const services = usePanel()
+    return <FeishuAllowedPeople source={sourceView({ id: 'feishu-instance', labels: { oc_a: 'A team', oc_b: 'B team' } })}
+      field={{ key: 'allowed', type: 'rows', label: { zh: 'Allowed users', en: 'Allowed users' }, columns: [] }}
+      part={{ allowed: value, syncChat: '' }} services={services} reload={async () => {}}
+      onChange={next => { const people = next.allowed as Person[]; changed(people); setValue(people) }} />
   }
   const container = document.createElement('div'); document.body.append(container)
   const root = createRoot(container)
@@ -69,6 +72,7 @@ it('searches and selects across chats, preserves the current list, deduplicates 
   expect(h.selected()).toEqual([{ id: 'ou_alice', name: 'Alice' }, { id: 'ou_bob', name: 'Bob' }, { id: 'ou_carol', name: 'Carol' }])
   expect(dialog()).toBeNull()
   expect(h.requests.every(request => request.method === 'GET')).toBe(true)
+  expect(h.requests.some(request => request.path.endsWith('/sources/feishu-instance/people'))).toBe(true)
   await click(button(zh['people.choose']))
   expect(choices().every(choice => choice.disabled)).toBe(true)
   await click(button(zh.cancel))
@@ -104,4 +108,5 @@ it('shows lookup errors without changing access and supports a manual open_id wh
   await click(button(zh.addRow, h.container))
   expect(h.selected()).toContainEqual({ id: 'ou_manual', name: 'Manual User' })
   expect(h.requests.every(request => request.method === 'GET')).toBe(true)
+  expect(h.requests.some(request => request.path.endsWith('/sources/feishu-instance/people'))).toBe(true)
 })

@@ -6,16 +6,10 @@ import type { PromptVersion } from './app/prompts.ts'
 import type { SettingsVersion } from './app/store.ts'
 import type { SettingsSave } from './policy.ts'
 
-/** Key of a KV record whose value has type `V`; a plain string represents an untyped key. */
-export type Key<V> = string & { readonly __value?: V }
-/** Family of KV records sharing a prefix: callable to build a key from its name parts, and exposing `prefix` for listing. */
-export type Family<V, A extends unknown[]> = ((...name: A) => Key<V>) & { readonly prefix: string }
-/** Define a single typed KV key; external Source plugins use `record` and `family` to type their own keys. */
-export const record = <V>(key: string) => key as Key<V>
-/** Define a KV key family whose keys join `prefix` and name parts with `:` (or a custom `format`). */
-export function family<V, A extends unknown[] = [string]>(prefix: string, format = (...name: A) => name.join(':')): Family<V, A> {
-  return Object.assign((...name: A) => `${prefix}${format(...name)}` as Key<V>, { prefix })
-}
+import { family, record } from './infra/keys.ts'
+import { FEISHU_KV } from './integrations/feishu/server/state.ts'
+export { family, record } from './infra/keys.ts'
+export type { Family, Key } from './infra/keys.ts'
 
 export const KV = {
   /** Store: current database schema version. */
@@ -38,11 +32,6 @@ export const KV = {
     prompts: record<number | null>('prompt-notification'), settings: record<number | null>('settings-notification') },
   /** Per-Source resolved display names mapping a named ID (such as a Feishu chat ID) to its display name. */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
-  /**
-   * Feishu Source: known chats (`true` for direct messages); per-chat history cursor and active topics mapped from topic ID
-   * to last-seen timestamp; and per-polled-thread seen message IDs and initialization flag.
-   */
-  feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
-    topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
-    seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /** Compatibility alias for existing readers; the integration owns these keys. */
+  feishu: FEISHU_KV,
 }

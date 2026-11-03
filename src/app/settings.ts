@@ -29,7 +29,7 @@ const environment = ({ executor }: SettingsValue) => JSON.stringify([executor.di
 interface Block {
   parse(value: unknown, sources: SourceRegistry, id: string): unknown
   merge(settings: SettingsValue, value: unknown, id: string): SettingsValue
-  guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
+  guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin, sources: SourceRegistry): void
 }
 const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
   policy: {
@@ -50,7 +50,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     parse: (value, sources, id) => sources.validate(id, z.object({ enabled: z.boolean(), config: z.unknown() }).parse(value)),
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: value as SettingsValue['sources'][string] } }),
     // Only the management panel may switch source accounts.
-    guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
+    guard: (current, candidate, origin, sources) => { if (origin !== 'panel' && setupChanged(current, candidate, sources)) throw new UserError('panelOnlyAccounts') },
   },
 }
 
@@ -140,7 +140,7 @@ export class Settings {
   }
   /**
    * Validates and saves one settings block against its `revision`; a no-op save records no new revision, a changed policy
-   * version notifies affected open tickets, and changing a setup-read field (`SETUP_FIELDS`, such as an account CLI) or any
+   * version notifies affected open tickets, and changing a setup-read field (`SourceKind.setup.fields`, such as an account CLI) or any
    * change saved while waiting for setup (`!this.host.setup.configured()`) restarts `feishu-superagent` so setup runs again.
    * @param origin - Caller origin; restricts execution-environment and account-CLI changes to `'panel'` (a guardrail against prompt-injected tool calls, not an OS security boundary, since agents run shell commands; `origin` has no default so no caller receives panel privileges implicitly).
    * @returns Save outcome with the block's current `revision`, whether `policy_changed`, whether `restarting`, and `context_delivery` status (`'injected'` or `'pending'`).
@@ -165,7 +165,7 @@ export class Settings {
       try { await resolveRoleModel(this.host.agentRuntime, model) }
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
-    rules.guard?.(current, candidate, origin)
+    rules.guard?.(current, candidate, origin, sources)
     const oldWorkspaces = sources.workspaces(current), newWorkspaces = sources.workspaces(candidate)
     if (JSON.stringify(oldWorkspaces) !== JSON.stringify(newWorkspaces)) {
       if (origin !== 'panel') throw new UserError('panelOnlyEnvironment')
@@ -177,7 +177,7 @@ export class Settings {
         await access(canonical, constants.R_OK | constants.W_OK | constants.X_OK)
       }
     }
-    if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
+    if (setupChanged(current, candidate, sources)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // Re-read current settings after async checks in case unrelated blocks were saved concurrently.
     const old = store.settings()
@@ -186,7 +186,7 @@ export class Settings {
       const delivery = await sessions.delivery(`settings:${block}`)
       return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting: false, context_delivery: delivery }
     }
-    const restarting = setupChanged(old, settings) || !this.host.setup.configured()
+    const restarting = setupChanged(old, settings, sources) || !this.host.setup.configured()
     const before = policyVersion(old), after = policyVersion(settings)
     const scope = (version: SettingsValue) => ({
       scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })

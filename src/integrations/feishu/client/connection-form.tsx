@@ -1,19 +1,19 @@
 /** Local credential entry: never read credentials back or persist them in browser storage. */
 import { useRef, useState, type FormEvent } from 'react'
-import { Button, Input } from './controls.tsx'
-import { usePanel, usePanelData } from './provider.tsx'
-import { Field, Fields } from './settings-kit.tsx'
-import type { SourceView } from './api.ts'
-import { settingsRoute } from './route.ts'
-import { Hint, KeyValues, SetupMessage, CheckSetupButton } from './widgets.tsx'
+import { Button, Input } from '../../../client/controls.tsx'
+import { Field, Fields } from '../../../client/settings-kit.tsx'
+import type { ConnectionPanelProps } from '../../../client/source-plugins.tsx'
+import type { FeishuBotSetupRequest, FeishuBotSetupResult } from '../shared/contracts.ts'
+import { Hint, KeyValues } from '../../../client/widgets.tsx'
 
-export function FeishuSetup({ source }: { source?: Pick<SourceView, 'value'> }) {
-  const { t, call, restart, navigate } = usePanel()
-  const { running, setup } = usePanelData()
-  const bot = setup?.accounts?.feishu
-  const configured = !!source?.value.config.cli || !!bot
+export interface FeishuConnectionProps extends Omit<ConnectionPanelProps, 'services'> {
+  t: ConnectionPanelProps['services']['t']
+  configure(request: FeishuBotSetupRequest): Promise<FeishuBotSetupResult>
+}
+export function FeishuConnectionForm({ source, t, configure, runningCount, problem, onChanged, onRestartRequired, onOpenPolicy }: FeishuConnectionProps) {
+  const bot = source.connection?.account
+  const configured = source.connection?.configured || !!bot
   const [editing, setEditing] = useState(false)
-  const problem = setup?.feishuProblem ?? setup?.problem
   const [busy, setBusy] = useState(false)
   const pending = useRef(false)
   const [result, setResult] = useState('')
@@ -30,14 +30,12 @@ export function FeishuSetup({ source }: { source?: Pick<SourceView, 'value'> }) 
     setResult('')
     setError('')
     try {
-      const response = await call('POST setup/feishu', {
-        body: {
-          action,
-          cli: String(data.get('cli') ?? ''),
-          appId: String(data.get('appId') ?? '').trim(),
-          appSecret: String(data.get('appSecret') ?? ''),
-          brand: data.get('brand') === 'lark' ? 'lark' : 'feishu'
-        }
+      const response = await configure({
+        action,
+        cli: String(data.get('cli') ?? ''),
+        appId: String(data.get('appId') ?? '').trim(),
+        appSecret: String(data.get('appSecret') ?? ''),
+        brand: data.get('brand') === 'lark' ? 'lark' : 'feishu'
       })
       setResult(
         t(response.saved ? 'botSetupSaved' : 'botSetupChecked', {
@@ -48,7 +46,8 @@ export function FeishuSetup({ source }: { source?: Pick<SourceView, 'value'> }) 
         const secret = form.elements.namedItem('appSecret') as HTMLInputElement
         secret.value = ''
         setEditing(false)
-        if (response.restarting) restart()
+        if (response.restarting) onRestartRequired()
+        else await onChanged()
       }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t('botSetupFailed'))
@@ -67,24 +66,18 @@ export function FeishuSetup({ source }: { source?: Pick<SourceView, 'value'> }) 
           {bot ? (
             <KeyValues
               rows={[
-                [t('feishuBot'), bot.name || bot.botId],
-                ['App ID', bot.appId],
-                [t('botSetupBrand'), bot.brand === 'feishu' ? '飞书' : 'Lark']
+                [t('feishuBot'), bot.name || bot.id],
+                ...bot.details.map(({ label, value }): [string, string] => [label === 'Platform' ? t('botSetupBrand') : label, value])
               ]}
             />
           ) : (
             <Hint>{t('botSetupStored')}</Hint>
           )}
-          <Hint>{t(source?.value.enabled === false ? 'botSetupDisabled' : 'botSetupNext')}</Hint>
-          {problem && (
-            <div role="status">
-              <SetupMessage problem={problem} lead />
-              <CheckSetupButton />
-            </div>
-          )}
+          <Hint>{t(source.value.enabled === false ? 'botSetupDisabled' : 'botSetupNext')}</Hint>
+          {problem}
           <div className="dt-row-buttons">
             <Button onClick={() => setEditing(!editing)}>{t(editing ? 'cancel' : 'botSetupEdit')}</Button>
-            <Button onClick={() => navigate(settingsRoute('eval'))}>{t('botSetupAllowed')}</Button>
+            <Button onClick={onOpenPolicy}>{t('botSetupAllowed')}</Button>
           </div>
         </section>
       )}
@@ -135,7 +128,7 @@ export function FeishuSetup({ source }: { source?: Pick<SourceView, 'value'> }) 
               <Input name="appSecret" type="password" required maxLength={2048} autoComplete="new-password" />
             </Field>
             <Hint>{t('botSetupPermissions')}</Hint>
-            {running > 0 && <Hint>{t('restartInterrupts', { count: running })}</Hint>}
+            {runningCount > 0 && <Hint>{t('restartInterrupts', { count: runningCount })}</Hint>}
             <div className="dt-row-buttons">
               <Button type="submit" value="check" variant="outline">
                 {t('botSetupCheck')}

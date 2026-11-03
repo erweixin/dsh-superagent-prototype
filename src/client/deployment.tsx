@@ -1,10 +1,13 @@
 /** Independent deployment configuration; machine settings come from the startup config. */
+import { localized } from './text.ts'
+import { useSourceClients } from './source-plugins.tsx'
 import type { SetupView } from './api.ts'
 import { usePanel } from './provider.tsx'
 import { CheckSetupButton, KeyValues, Section, SetupMessage } from './widgets.tsx'
 export type DeploymentForm = undefined
 export function DeploymentPage({ setup }: { setup: SetupView; form?: DeploymentForm; accounts?: boolean }) {
   const { t } = usePanel()
+  const plugins = useSourceClients()
   return (
     <div className="dt-embedded">
       <Section title={t('deploymentMachine')}>
@@ -13,7 +16,11 @@ export function DeploymentPage({ setup }: { setup: SetupView; form?: DeploymentF
       </Section>
       {setup.problem && <SetupMessage problem={setup.problem} lead />}
       <CheckSetupButton />
-      <Section title={t('deploymentFeishu')}>{setup.accounts?.feishu?.name ?? t('app.configureBot')}</Section>
+      {(setup.connections ?? []).filter(connection => plugins.has(connection.kind)).map(connection =>
+        <Section key={connection.id} title={localized(t, connection.title)}>
+          {connection.account?.name ?? t('sourceAccountPending')}
+          {connection.account && <KeyValues rows={connection.account.details.map(({ label, value }) => [label, value])} />}
+        </Section>)}
     </div>
   )
 }

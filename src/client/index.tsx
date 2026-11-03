@@ -35,7 +35,7 @@ function Root() {
       localStorage.getItem('superagent-language') === 'en' ? 'en' : 'zh'
     )
   const t: T = (key, values) => {
-    let value = (language === 'zh' ? zh : en)[key]
+    let value = (language === 'zh' ? zh : en)[key] ?? key
     for (const [k, v] of Object.entries(values ?? {})) value = value.replaceAll(`{${k}}`, String(v))
     return value
   }

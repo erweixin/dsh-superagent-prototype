@@ -1,6 +1,6 @@
 /** Context-aware shared UI widgets: page/section headers, timestamps, Markdown rendering, and confirmation actions. */
 import { Fragment, useState, type ReactNode } from 'react'
-import type { SetupProblem } from '../setup.ts'
+import type { SourceProblem } from '../contracts/source-settings.ts'
 import { Button, Icon, InfoTip, Modal, StateDot, type DotState, type IconName } from './controls.tsx'
 import { inlines, linkify, markdownBlocks, type Inline } from './markdown.ts'
 import { useAction, usePanel, usePanelData } from './provider.tsx'
@@ -13,7 +13,7 @@ export function When({ at }: { at: string | undefined }) {
   const { t } = usePanel()
   return <time dateTime={at} title={fullTime(at, t('lang'))}>{when(at, t('lang'))}</time>
 }
-export function SetupMessage({ problem, lead }: { problem: Pick<SetupProblem, 'code' | 'values'>; lead?: boolean }) {
+export function SetupMessage({ problem, lead }: { problem: Pick<SourceProblem, 'code' | 'values'> & { detail?: string }; lead?: boolean }) {
   const { t } = usePanel()
   const text = setupText(t, problem)
   return <>

@@ -22,7 +22,7 @@ import type { Variable } from './execution-environment.ts'
 import { policyHistory } from './settings-history.ts'
 import { overview } from './views/overview.ts'
 import { settingsView } from './views/settings.ts'
-import { sourcesStatus, type SetupState } from './views/sources.ts'
+import { sourcesStatus, sourceConnection, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 
@@ -44,6 +44,7 @@ export interface HttpHost {
   /** Resolved deployment; throws if read while waiting for setup (`!configured()`). */
   readonly deployment: Deployment
   readonly setupProblem?: SetupProblem | undefined
+  readonly sourceProblems?: Readonly<Record<string, SetupProblem>>
   readonly feishuProblem?: SetupProblem | undefined
   configured(): boolean
   links(): LinkTarget
@@ -95,6 +96,10 @@ function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admis
 function setupView(runtime: HttpHost) {
   const resolved = runtime.configured() ? runtime.deployment : undefined
   return {
+    connections: runtime.sources.instances().filter(source => source.installed).flatMap(source => {
+      const connection = sourceConnection(runtime.sources, source, { deployment: resolved, problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem, sourceProblems: runtime.sourceProblems })
+      return connection ? [{ id: source.id, kind: source.kind, title: runtime.sources.kind(source.kind)!.title, ...connection }] : []
+    }),
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
     accounts: resolved ? { feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
   }
@@ -108,7 +113,7 @@ export function stateView(runtime: HttpHost) {
 }
 const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
-  problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem })
+  problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem, sourceProblems: runtime.sourceProblems })
 export type StateView = ReturnType<typeof stateView>
 /** Builds a ticket's detail view; `environment` is empty while waiting for setup because it requires the resolved deployment. */
 function ticketPage(runtime: HttpHost, id: string) {

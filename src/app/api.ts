@@ -1,5 +1,5 @@
 /** Type-only management API contract between the web panel and host routes, imported by the panel without bundling host code. */
-import type { FeishuBotSetupRequest, FeishuBotSetupResult } from './feishu-setup.ts'
+import type { FeishuSetupApi } from '../integrations/feishu/shared/contracts.ts'
 import type { ModelCatalog } from './agent-runtime.ts'
 import type { PromptConfig, Prompts } from './prompts.ts'
 import type { PromptsView, StateView, TicketPageView } from './http.ts'
@@ -18,7 +18,7 @@ interface Paged { offset?: number; limit?: number }
 /** Whether a context update was already injected into the main Session or is still pending delivery. */
 type Delivery = 'injected' | 'pending'
 
-export interface Api {
+export interface Api extends FeishuSetupApi {
   'GET state': { response: StateView }
   'GET overview': { response: OverviewView }
   'GET search': { query: { q: string }; response: SearchView }
@@ -40,7 +40,6 @@ export interface Api {
   'PUT settings/:block': { body: { value: unknown; revision: number }; response: { revision: number; restarting: boolean } }
   'GET policy/history': { response: HistoryView }
   'POST policy-sync/:id': { response: { policy: unknown } }
-  'POST setup/feishu': { body: FeishuBotSetupRequest; response: FeishuBotSetupResult }
   'POST setup/check': { response: { restarting: true } }
   'GET models': { response: ModelCatalog }
   'GET prompts': { query?: { revision?: number; offset?: number }; response: PromptsView }

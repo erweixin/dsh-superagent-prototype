@@ -1,4 +1,5 @@
 /** Source status view: health, 24-hour trigger counts, and recently filtered or dropped messages per Source instance. */
+import type { SourceConnection } from '../../contracts/source-settings.ts'
 import { threadKey } from '../../core/index.ts'
 import type { Deployment } from '../../deployment.ts'
 import type { Health } from '../../sources/host.ts'
@@ -24,10 +25,18 @@ export interface SetupState {
   deployment?: Deployment | undefined
   /** Setup failure that stops all Sources. */
   problem?: SetupProblem | undefined
+  sourceProblems?: Readonly<Record<string, SetupProblem>>
   /** Feishu bot check failure that pauses only the Feishu Source. */
   feishuProblem?: SetupProblem | undefined
 }
-export const problemOf = (id: string, setup: SetupState) => [setup.problem, setup.feishuProblem].find(problem => problem?.place === id)
+export const problemOf = (id: string, setup: SetupState) => setup.sourceProblems?.[id] ?? [setup.problem, setup.feishuProblem].find(problem => problem?.place === id)
+/** Publishes only the account facts explicitly provided by the source adapter. */
+export function sourceConnection(sources: SourceRegistry, instance: SourceInstance, setup: SetupState): SourceConnection | undefined {
+  const connection = sources.kind(instance.kind)?.connection?.(instance.config, setup.deployment)
+  if (!connection) return undefined
+  const problem = problemOf(instance.id, setup) ?? setup.problem
+  return { ...connection, ...(problem ? { problem } : {}) }
+}
 /** Source lifecycle state in priority order: missing kind, disabled, setup/part error, blocked on global setup, starting, paused, or ready. */
 export type SourceState = 'missing' | 'off' | 'error' | 'setup' | 'starting' | 'paused' | 'ready'
 function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {

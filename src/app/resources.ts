@@ -1,10 +1,9 @@
+import type { SourceRegistry } from '../sources/registry.ts'
+import { installedSourceKinds } from './source-plugins.ts'
 import type { AgentRuntime } from './agent-runtime.ts'
 /** Serves paginated context resources to orchestrator_read so large bodies stay out of model prompts until requested. */
 import { UserError, key, latestReport, reached, runningAssignment, threadKey, type Ticket, type Trigger } from '../core/index.ts'
 import { batchOf, inputMessage, triggerMessage, workerSessionId } from '../executor/codex.ts'
-import { feishuReferences, feishuRead } from '../sources/feishu-read.ts'
-import { feishuRef } from '../sources/feishu.ts'
-import { feishuTriggerId } from '../sources/feishu-trigger.ts'
 import { ASSIGNMENTS, INPUTS, assignmentLine, decisionCard, decisionDetails, inputLine, newestPage, preview, textPage, threadCard, ticketCard,
   ticketDetails, triggerCard, type TicketThread } from './cards.ts'
 import { threadTitle } from './views/records.ts'
@@ -48,7 +47,7 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'prompt-preview/<id>', holds: 'a composed prompt that orchestrator_prompts_save previewed' },
   { name: 'models', holds: 'model providers, the Codex default and each role\'s model' },
   { name: 'models/<provider>', holds: 'one provider\'s models' },
-  { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the feishu-superagent-feishu skill describes', executor: true },
+  ...installedSourceKinds.flatMap(kind => kind.resources ? [kind.resources.descriptor] : []),
 ]
 export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
   .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
@@ -63,7 +62,7 @@ export interface ResourceHost {
   promptVersion(sessionId: string): PromptVersion
   /** Whether a Session may read `revision` (the revision it currently runs under or any revision it ran under previously). */
   mayRead(sessionId: string, revision: number): boolean
-  feishuPageSize(): number
+  readonly sources: SourceRegistry
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
 }
 export interface MainResourceHost extends ResourceHost {
@@ -196,18 +195,11 @@ const ROUTES: readonly Route[] = [
     if (!models) throw new Error('Unknown model provider')
     return list(read, (offset, count) => models.slice(offset, offset + count))
   }],
-  ['feishu/', async read => {
-    const source = trigger(read.host, read.rest.split('/')[0]!, read.ticketId)
-    const ref = feishuRef(source)
-    if (!ref) throw new Error('A Feishu source trigger is required')
-    const commands = read.host.commands.withSignal(read.signal)
-    return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize()))
-  }],
   ['trigger/', async read => {
     const { host, rest, ticketId, offset, signal } = read
     if (!rest || rest.includes('/')) throw new Error('Unknown context resource')
     const found = trigger(host, rest, ticketId)
-    const ref = feishuRef(found)
+    const references = host.sources.references(found)
     // Redact decision IDs, other tickets, and unreachable neighbour triggers when a worker session reads a trigger.
     const ticket = ticketId ? host.store.tickets.get(ticketId) : undefined
     const shown = (item: Trigger | undefined) => item && (!ticket || readable(host, ticket, item)) ? item : undefined
@@ -216,12 +208,12 @@ const ROUTES: readonly Route[] = [
       : disposition
     // Omit card preview and self-reference because this resource returns the full text.
     const { preview: _preview, chars: _chars, read: _read, ...card } = triggerCard(found, visible)
-    const parent = found.source === 'feishu' && typeof found.meta.parentId === 'string' ? found.meta.parentId : undefined
-    const repliedTo = shown(parent ? host.store.triggers.get(feishuTriggerId(parent)) : undefined)
+    const parent = host.sources.repliesTo(found)
+    const repliedTo = shown(parent ? host.store.triggers.get(parent) : undefined)
     const neighbours = host.store.read.neighbours(threadKey(found.threads[0]!), found.at, found.id)
     const around = { before: shown(neighbours.before), after: shown(neighbours.after) }
     return { ...card, ...await host.sourceLink(found, signal), acknowledgement: host.store.replyStatus(key('ack', found.id)) ?? 'not_requested',
-      ...(ref ? { context: feishuReferences(ref) } : {}),
+      ...(references ? { context: references } : {}),
       ...(offset === 0 ? {
         ...repliedTo ? { replied_to: triggerLine(repliedTo) } : {},
         around: { ...around.before ? { before: triggerLine(around.before) } : {}, ...around.after ? { after: triggerLine(around.after) } : {} },
@@ -299,8 +291,15 @@ export async function readResource(host: ResourceHost, resource: string, offset:
   signal?: AbortSignal) {
   const name = resource.replace(/^event\//, 'trigger/').replace(/^task\//, 'ticket/').replace(/^observation\//, 'decision/')
   const route = ROUTES.find(([route]) => route.endsWith('/') ? name.startsWith(route) : name === route)
-  if (!route) throw new Error('Unknown context resource')
   const sessionId = ticketId ? workerSessionId(host.store.tickets.get(ticketId) ?? ticketId) : host.masterId
+  if (!route) {
+    const extension = host.sources.resource(name)
+    if (!extension) throw new Error('Unknown context resource')
+    const source = trigger(host, extension.triggerId, ticketId)
+    if (source.source !== extension.source) throw new Error('Source resource does not match its trigger')
+    return sourcePage({ host, resource: name, rest: '', offset, limit, sessionId, ticketId, signal }, extension.source,
+      () => extension.read(host.commands.withSignal(signal), source))
+  }
   const rest = route[0].endsWith('/') ? name.slice(route[0].length) : ''
   return route[1]({ host, resource: name, rest, offset, sessionId, ...limit ? { limit } : {}, ...ticketId ? { ticketId } : {},
     ...signal ? { signal } : {} })

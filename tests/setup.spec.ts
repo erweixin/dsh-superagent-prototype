@@ -1,3 +1,5 @@
+import { SourceRegistry } from '../src/sources/registry.ts'
+import { installedSourceKinds } from '../src/app/source-plugins.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,7 +18,9 @@ function harness(output: string) {
   const stateDir = mkdtempSync(join(tmpdir(), 'superagent-setup-'))
   roots.push(stateDir)
   const codexPath = resolve('tests/fixtures/codex.mjs')
-  const setup = new Setup({ machine: machineOf({ stateDir, codexPath }), lifetime: new AbortController().signal, restart() {} })
+  const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+  for (const kind of installedSourceKinds) sources.register(kind)
+  const setup = new Setup({ machine: machineOf({ stateDir, codexPath }), lifetime: new AbortController().signal, restart() {} }, sources)
   return { setup, stateDir, codexPath }
 }
 

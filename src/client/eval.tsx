@@ -1,8 +1,8 @@
 /** Eval status view (Decision log) and Eval settings group (Policy rules, per-Source admission, and assessor settings). */
-import { useState } from 'react'
-import { AllowedPeople } from './allowed-people.tsx'
+import { useEffect, useState } from 'react'
+import { useSourceClients } from './source-plugins.tsx'
 import { ADMISSION_DEFAULTS, ADMISSION_OPTIONS, type Admission, type AdmissionCell } from '../admission.ts'
-import type { AdmissionRowView } from '../sources/kind.ts'
+import type { AdmissionRowView } from '../contracts/source-settings.ts'
 import { LIMITS } from '../limits.ts'
 import { DECISION_FILTERS, DECISION_KINDS, usePoll, type DecisionFilter, type Settings, type SourceView } from './api.ts'
 import { Button, DisclosureRow, Icon, InfoTip, Input, Pill, SegmentedControl, Switch } from './controls.tsx'
@@ -73,19 +73,20 @@ function SourcePart({ source, part, saved, dirty, onChange, reload }: {
   source: SourceView; part: Part; saved: Part; dirty: boolean; onChange: (next: Part) => void; reload: () => Promise<void>
 }) {
   const { t, call, notify } = usePanel()
+  const plugin = useSourceClients().get(source.kind)
   const policy = source.policy!
   const sync = policy.sync
   const run = useAction(() => call('POST policy-sync/:id', { id: source.id }), { reload })
   // Syncing saves the Policy block, so require unsaved edits to be saved or discarded first.
   const syncNow = () => { if (dirty) notify(t('syncNeedsSave')); else void run.run() }
   return <div className="dt-part">
-    {policy.fields.map(field => field.key === 'allowed' && policy.people ? <AllowedPeople key={field.key}
-      sourceId={source.id} label={localized(t, field.label)} value={(part.allowed ?? []) as { id: string; name?: string }[]}
-      labels={source.labels} syncChat={String(part.syncChat ?? '')}
-      refreshChats={async () => { await call('POST sources/:id/labels', { id: source.id }); await reload() }}
-      onChange={allowed => onChange({ ...part, allowed })} /> : <SourceField key={field.key} field={field} value={part[field.key]} saved={saved[field.key]} fact={undefined}
-      labels={source.labels}
-      onChange={next => onChange({ ...part, [field.key]: next })} />)}
+    {policy.fields.map(field => {
+      const Editor = plugin?.policyFields?.[field.key]
+      return Editor ? <Editor key={field.key} source={source} field={field} part={part}
+        services={{ t, call, notify }} onChange={onChange} reload={reload} />
+        : <SourceField key={field.key} field={field} value={part[field.key]} saved={saved[field.key]} fact={undefined}
+          labels={source.labels} onChange={next => onChange({ ...part, [field.key]: next })} />
+    })}
     {sync && <div className="dt-row-buttons">
       <Button variant="outline" size="sm" icon={<Icon name="refresh" />} disabled={run.busy || !sync.ready} onClick={syncNow}>{localized(t,
         sync.label)}</Button>
@@ -138,14 +139,15 @@ function AdmissionTable({ rows, labels, table, explicit, onChange }: {
   </Section>
 }
 
-function PolicyBlock() {
+function PolicyBlock({ focus }: { focus?: string }) {
   const { t } = usePanel()
   const { settings: { blocks, sources, policyVersion }, reload } = useSettings()
   const draft = useBlockDraft('policy', blocks.policy.value, blocks.policy.revision)
   const policy = draft.value
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const parts = sources.filter(source => source.installed && source.policy)
-  const [tab, setTab] = useState<string>()
+  const [tab, setTab] = useState<string | undefined>(focus)
+  useEffect(() => { if (focus) setTab(focus) }, [focus])
   const current = parts.find(source => source.id === tab) ?? parts[0]
   const edit = (next: Partial<typeof policy>) => draft.edit({ ...policy, ...next })
   const toggle = (id: string) => { const next = new Set(expanded); if (next.has(id)) next.delete(id); else next.add(id); setExpanded(next) }
@@ -221,9 +223,9 @@ function EvalBlock() {
   </form>
 }
 
-export function EvalSettings({ version }: { version?: string | undefined }) {
+export function EvalSettings({ version, focus }: { version?: string | undefined; focus?: string }) {
   return <div className="dt-form">
-    <PolicyBlock />
+    <PolicyBlock focus={focus} />
     <EvalBlock />
     <ConfigHistory blocks={['policy', 'eval']} versions {...version ? { focus: version } : {}} />
   </div>

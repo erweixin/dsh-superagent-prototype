@@ -9,7 +9,7 @@ import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 import { MessageImagesSchema, messageImages } from '../message-images.ts'
 import type { Commands } from '../../infra/commands.ts'
-import { uploadFeishuImage } from '../../sources/feishu-upload.ts'
+import { uploadFeishuImage } from '../../integrations/feishu/server/upload.ts'
 
 export interface ExecutorToolsHost {
   readonly commands: Commands

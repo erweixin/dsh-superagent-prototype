@@ -1,8 +1,9 @@
-/** Subprocess wrapper for running lark-cli and optional git commands under the deployment's configured accounts. */
+/** Bounded subprocess execution with cancellation and sanitized errors. */
 import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
+import { runFeishuCommand } from '../integrations/feishu/server/commands.ts'
 import type { Deployment } from '../deployment.ts'
 
 const exec = promisify(execFile)
@@ -46,14 +47,8 @@ export function validItems<T>(item: z.ZodType<T>, list: readonly unknown[], tall
   if (tally) tally.skipped += list.length - items.length
   return items
 }
-/** Rewrites Feishu error 232011 (bot not in chat) with remediation instructions. */
-function membership(error: unknown): unknown {
-  if (!(error instanceof CliError) || error.code !== 232011) return error
-  const hint = 'The Feishu bot is not a member of the chat. Add the bot in the chat settings, then retry.'
-  return new CliError(hint, error.code, error.exitCode)
-}
 /**
- * Executes lark-cli and optional git subprocesses with deployment account credentials, timeouts, and abort signals.
+ * Executes subprocesses with deployment environment, timeouts, and abort signals.
  * Translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
  */
 export class Commands {
@@ -64,27 +59,15 @@ export class Commands {
   constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
   get deployment(): Deployment { return this.resolved() }
   withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
-  async run(program: string, args: string[], cwd?: string): Promise<string> {
+  async run(program: string, args: string[], cwd?: string, environment: Record<string, string | undefined> = {}): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', ...environment } })
       return stdout
     } catch (error) { throw commandError(error, program) }
   }
-  /**
-   * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.
-   * @throws CliError with Feishu's error code on failure (rewriting 232011 when the bot is not in the chat).
-   */
-  async lark<T>(args: string[], cwd?: string): Promise<T> {
-    const bot = this.deployment.feishu
-    if (!bot) throw new Error('The Feishu Source has no working bot CLI')
-    const output = await this.run(bot.cli, [...args, '--as', 'bot', '--format', 'json'], cwd)
-      .catch((error: unknown) => { throw membership(error) })
-    const result = JSON.parse(output) as { ok: boolean; data: T; error?: { code?: number; message?: string } }
-    const code = result.error?.code
-    if (!result.ok) throw membership(new CliError(`${result.error?.message ?? 'Feishu command failed'}${code ? ` (${code})` : ''}`, code))
-    return result.data
-  }
+  /** Compatibility method; CLI identity, JSON handling and Feishu errors belong to its adapter. */
+  async lark<T>(args: string[], cwd?: string): Promise<T> { return runFeishuCommand<T>(this, args, cwd) }
   /** Runs `git` on PATH using the agent's isolated git environment and credential helper. */
   async git(args: string[], cwd: string): Promise<string> { return this.run('git', args, cwd) }
 }

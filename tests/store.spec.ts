@@ -130,18 +130,21 @@ it('sets and removes a Source\'s keys in a Thread\'s meta', () => {
   expect(store.threads.get('github:6')).toBeUndefined()
   store.close()
 })
-it('spells every kv key in KV alone, so each record is named by its entry there', () => {
+it('spells every kv key only in its owning application or integration module', () => {
   const src = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
-  const entries = Object.values(KV).flatMap(group => Object.values(group) as (string | { prefix: string })[])
-  // Ignore single-word keys that collide with unrelated string literals.
-  const keys = entries.map(entry => typeof entry === 'string' ? entry : entry.prefix).filter(name => /[-:]/.test(name))
+  const owners = Object.entries(KV).flatMap(([group, entries]) => Object.values(entries).map(entry => ({
+    name: typeof entry === 'string' ? entry : entry.prefix,
+    owner: group === 'feishu' ? join('integrations', 'feishu', 'server', 'state.ts') : 'kv.ts',
+  }))).filter(({ name }) => /[-:]/.test(name))
   const modules = readdirSync(src, { recursive: true, encoding: 'utf8' })
-    .filter(path => /\.tsx?$/.test(path) && !['kv.ts', join('app', 'migration.ts')].includes(path))
-  const spelled = modules.flatMap(path => {
+    .filter(path => /\.tsx?$/.test(path) && path !== join('app', 'migration.ts'))
+  const spells = (text: string, name: string) => ["'", '"', '`'].some(quote => text.includes(`${quote}${name}`))
+  const spelledElsewhere = modules.flatMap(path => {
     const text = readFileSync(join(src, path), 'utf8')
-    return keys.filter(name => text.includes(`'${name}`) || text.includes(`\`${name}`)).map(name => `${path}: ${name}`)
+    return owners.filter(({ name, owner }) => path !== owner && spells(text, name)).map(({ name }) => `${path}: ${name}`)
   })
-  expect(spelled).toEqual([])
+  expect(spelledElsewhere).toEqual([])
+  expect(owners.filter(({ name, owner }) => !spells(readFileSync(join(src, owner), 'utf8'), name))).toEqual([])
 })
 
 it('runs what waits for a commit once the outermost transaction commits, and never what a rolled back one queued', () => {

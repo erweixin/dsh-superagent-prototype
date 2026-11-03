@@ -1,3 +1,5 @@
+import { SourceClientsProvider } from './source-plugins.tsx'
+import { installedSourceClients } from './plugins.ts'
 /** Root panel shell: header with global search and glossary, top-level navigation tabs, and active route view. */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { SearchView } from './api.ts'
@@ -182,7 +184,7 @@ export function App({ t, openSession, deploymentForm }: AppProps) {
   const back = useCallback(() => move(current => ({ route: current.stack.at(-1) ?? HOME, stack: current.stack.slice(0, -1) })), [move])
   const openTab = useCallback((tab: Tab) => move(current => ({ stack: [], route: tab === 'settings'
     ? settingsRoute(lastSettingsGroup(current)) : { page: tab, id: undefined } })), [move])
-  return <PanelProvider t={t} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
+  return <SourceClientsProvider plugins={installedSourceClients}><PanelProvider t={t} openSession={openSession} navigate={navigate} back={back} backLabel={routeLabel(t, location.stack.at(-1) ?? HOME)}>
     <Pages route={location.route} openTab={openTab} deploymentForm={deploymentForm} />
-  </PanelProvider>
+  </PanelProvider></SourceClientsProvider>
 }

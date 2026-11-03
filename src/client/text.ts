@@ -1,8 +1,7 @@
 /** Localization, reason formatting, message marker cleanup, and relative timestamp helpers. */
 import type { SuperagentKey } from './locales.ts'
-import type { Localized } from '../sources/kind.ts'
-import type { SetupProblem } from '../setup.ts'
-import type { Health } from '../sources/host.ts'
+import type { Localized } from '../contracts/source-settings.ts'
+import type { SourceProblem, SourceHealth } from '../contracts/source-settings.ts'
 import { reasonText, type Reason } from '../core/reasons.ts'
 
 export type T = (key: SuperagentKey, values?: Record<string, string | number>) => string
@@ -30,9 +29,13 @@ function label(t: T, reason: Reason): string {
   if (/^\w*Error\b/.test(written)) { const first = written.split('\n')[0]!; return first.length > 140 ? `${first.slice(0, 140)}…` : first }
   return written
 }
-export const setupText = (t: T, problem: Pick<SetupProblem, 'code' | 'values'>): string => t(`setup.${problem.code}`, problem.values)
-export const healthText = (t: T, health: Pick<Health, 'detail' | 'code' | 'values'>): string =>
-  health.code ? t(`healthCode.${health.code}` as const, health.values) : health.detail
+export const setupText = (t: T, problem: Pick<SourceProblem, 'code' | 'values'> & { detail?: string }): string => {
+  const key = `setup.${problem.code}` as SuperagentKey
+  const text = t(key, problem.values)
+  return text && text !== key ? text : problem.detail ?? problem.code
+}
+export const healthText = (t: T, health: Pick<SourceHealth, 'detail' | 'code' | 'values'>): string =>
+  health.code ? t(`healthCode.${health.code}` as SuperagentKey, health.values) : health.detail
 /** Replaces source content placeholders (images, cards, media, forwards, unresolved mentions) with localized labels. */
 export function readableMarkers(t: T, text: string): string {
   return text.replace(/!\[[^\]]*\]\([^)]*\)|\[Image: [^\]]*\]|\[image\]/g, t('imageMarker'))

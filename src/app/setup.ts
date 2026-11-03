@@ -1,21 +1,24 @@
 import { writeEnvironment } from '../infra/environment.ts'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { SETUP_FIELDS, resolveFeishuBot, type Deployment, type Machine } from '../deployment.ts'
+import type { Deployment, Machine } from '../deployment.ts'
+import type { SourceRegistry } from '../sources/registry.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 const execute = promisify(execFile)
 // Explicitly supported app-server releases; do not assume experimental APIs are forward-compatible.
 const supportedCodexVersions: readonly string[] = ['0.153.4', '0.166.0']
-const fields = (s: Settings) =>
-  JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map((k) => s.sources[id]?.config[k] ?? '')))
-export const setupChanged = (before: Settings, after: Settings) => fields(before) !== fields(after)
+const fields = (s: Settings, sources: SourceRegistry) =>
+  JSON.stringify(Object.entries(sources.setupFields()).map(([id, keys]) => keys.map(k => s.sources[id]?.config[k] ?? '')))
+export const setupChanged = (before: Settings, after: Settings, sources: SourceRegistry) => fields(before, sources) !== fields(after, sources)
 /** Owns the application lifecycle and state for this adapter. */
 export class Setup {
   private resolved?: Deployment
   problem?: SetupProblem
-  feishuProblem?: SetupProblem
-  constructor(private host: { machine: Machine; lifetime: AbortSignal; restart(): void }) {}
+  readonly sourceProblems: Record<string, SetupProblem> = {}
+  /** Compatibility accessor; source consumers use sourceProblems by ID. */
+  get feishuProblem(): SetupProblem | undefined { return this.sourceProblems.feishu }
+  constructor(private host: { machine: Machine; lifetime: AbortSignal; restart(): void }, private readonly sources: SourceRegistry) {}
   get commandEnvironment(): Record<string, string | undefined> {
     return {}
   }
@@ -44,15 +47,24 @@ export class Setup {
           `from ${JSON.stringify(this.host.machine.codexPath)}. Set codexPath to a supported executable.`
         )
       await this.probe([this.host.machine.codexPath, 'login', 'status'])
-      const feishu = await resolveFeishuBot(this.host.machine, settings.sources.feishu?.config, this.probe).catch(
-        (e) => {
-          if (e instanceof SetupError) this.feishuProblem = e.problem
-          else throw e
-          return undefined
+      const accounts: Record<string, unknown> = {}
+      const legacy: Record<string, unknown> = {}
+      for (const id of Object.keys(this.sourceProblems)) delete this.sourceProblems[id]
+      for (const kind of this.sources.installed()) {
+        if (!kind.setup) continue
+        try {
+          const account = await kind.setup.resolve(this.host.machine, settings.sources[kind.kind]?.config, this.probe)
+          if (account !== undefined) {
+            accounts[kind.kind] = account
+            if (kind.setup.legacyAccountKey) legacy[kind.setup.legacyAccountKey] = account
+          }
+        } catch (error) {
+          if (!(error instanceof SetupError)) throw error
+          this.sourceProblems[kind.kind] = error.problem
         }
-      )
-      this.resolved = { ...this.host.machine, ...(feishu ? { feishu } : {}) }
-      await writeEnvironment(this.resolved, settings.executor.blockedCommands)
+      }
+      this.resolved = { ...this.host.machine, accounts, ...legacy }
+      await writeEnvironment(this.resolved, settings.executor.blockedCommands, this.shims(this.resolved))
       this.problem = undefined
       return true
     } catch (e) {
@@ -71,11 +83,22 @@ export class Setup {
     setTimeout(() => this.host.restart(), 0)
   }
   async checkAccounts(block: SettingsBlock, settings: Settings) {
-    if (block === 'source:feishu')
-      await resolveFeishuBot(this.host.machine, settings.sources.feishu?.config, this.probe)
+    if (!block.startsWith('source:')) return
+    const id = block.slice('source:'.length)
+    await this.sources.kind(id)?.setup?.resolve(this.host.machine, settings.sources[id]?.config, this.probe)
   }
   async blockCommands(blocked: readonly string[]) {
-    if (this.resolved) await writeEnvironment(this.resolved, blocked)
+    if (this.resolved) await writeEnvironment(this.resolved, blocked, this.shims(this.resolved))
+  }
+  private shims(deployment: Deployment): Record<string, string> {
+    const shims: Record<string, string> = {}
+    for (const kind of this.sources.installed()) {
+      for (const [name, script] of Object.entries(kind.setup?.shims?.(deployment) ?? {})) {
+        if (name in shims) throw new Error(`Duplicate source command: ${name}`)
+        shims[name] = script
+      }
+    }
+    return shims
   }
   restore() {}
 }

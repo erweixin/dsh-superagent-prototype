@@ -1,3 +1,4 @@
+import { FEISHU_HEALTH_TEXT } from '../integrations/feishu/shared/messages.ts'
 /** Host and context interfaces connecting Source plugins to the application; also imported by the web panel, so it must not import Node-only modules. */
 import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
@@ -9,10 +10,9 @@ import { fill } from '../infra/text.ts'
 
 /** Fixed English health templates (`{name}` placeholders); the panel localizes each `code` in the interface language. */
 export const HEALTH_TEXT = {
+  ...FEISHU_HEALTH_TEXT,
   setupPending: 'Waiting for the deployment check',
   sourceOff: 'Off',
-  feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
-  feishuBotMissing: 'Waiting for the Feishu bot',
   pollFailures: '{count} consecutive failed polls; last: {error}',
 } as const
 export type HealthCode = keyof typeof HEALTH_TEXT
